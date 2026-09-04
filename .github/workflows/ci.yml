@@ -1,0 +1,122 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+# A newer push to the same branch makes an in-flight run pointless.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build (Node ${{ matrix.node }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node: ["20", "22"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+        env:
+          PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: "1"
+
+      - name: Build
+        run: npm run build
+
+      - name: Verify the build emitted a usable site
+        run: |
+          test -s dist/index.html || { echo "::error::no index.html emitted"; exit 1; }
+          compgen -G "dist/assets/*.js"  > /dev/null || { echo "::error::no JS bundle emitted"; exit 1; }
+          compgen -G "dist/assets/*.css" > /dev/null || { echo "::error::no CSS bundle emitted"; exit 1; }
+          # The site is served from a subdirectory on Pages, so every asset
+          # reference has to be relative. An absolute one loads locally and
+          # 404s in production, which is the worst way to find out.
+          if grep -qE '(src|href)="/[^/]' dist/index.html; then
+            echo "::error::dist/index.html contains root-absolute asset paths"
+            grep -nE '(src|href)="/[^/]' dist/index.html
+            exit 1
+          fi
+          echo "dist is $(du -sh dist | cut -f1)"
+
+      - name: Upload build
+        if: matrix.node == '22'
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist
+          retention-days: 7
+
+  smoke:
+    name: Boot smoke test
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - run: npm ci
+
+      - name: Install Chromium
+        run: npx playwright install --with-deps chromium
+
+      - run: npm run build
+
+      # Loads the built site in a real browser and asserts it boots. A build
+      # cannot catch a shader that fails to compile or a module that throws on
+      # import; both leave CI green and the game stuck on the loading screen.
+      - name: Boot the game
+        run: npm run smoke
+
+  invariants:
+    name: Project invariants
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: No binary assets
+        # Every texture, mesh and sound is generated procedurally at load. If a
+        # binary asset is ever committed, that property has quietly been lost.
+        run: |
+          found=$(git ls-files | grep -iE '\.(png|jpe?g|gif|webp|bmp|tga|mp3|wav|ogg|m4a|glb|gltf|fbx|obj|ttf|otf|woff2?)$' || true)
+          if [ -n "$found" ]; then
+            echo "::error::binary assets committed — the project is meant to ship none"
+            echo "$found"
+            exit 1
+          fi
+          echo "no binary assets tracked"
+
+      - name: Physical constants unchanged
+        # These are cited real-world values, not tuning knobs. If one of them
+        # moves, it should be a deliberate, reviewed change rather than a
+        # side effect of balancing something else.
+        run: |
+          check() {
+            if ! grep -qE "^export const $1 = $2;" src/constants.js; then
+              echo "::error::$1 is no longer $2 in src/constants.js"
+              grep -nE "^export const $1" src/constants.js || true
+              exit 1
+            fi
+            echo "  $1 = $2"
+          }
+          check LUNAR_GRAVITY 1.62
+          check ENGINE_MAX_THRUST 45040
+          check LANDER_DRY_MASS 6800
