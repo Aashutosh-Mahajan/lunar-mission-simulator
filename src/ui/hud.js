@@ -1,5 +1,7 @@
 import * as THREE from "three";
 
+import { LUNAR_GRAVITY } from "../constants.js";
+
 // ---------------------------------------------------------------------------
 // Flight instruments. Plain DOM/SVG overlay driven from the simulation state
 // each frame (per the project convention: no in-3D text).
@@ -148,7 +150,7 @@ export default class Hud {
 
     const range = terrain.distanceToPad(s.position.x, s.position.z);
     this.dom.range.textContent = range.toFixed(0);
-    this.dom.gravity.textContent = (runtime.diagnostics?.gravity ?? 1.62).toFixed(2);
+    this.dom.gravity.textContent = (runtime.diagnostics?.gravity ?? LUNAR_GRAVITY).toFixed(2);
 
     // Rate gauges: full width = twice the limit, so the limit tick is mid-bar.
     const descentRate = Math.max(0, -t.verticalSpeed);
@@ -177,7 +179,7 @@ export default class Hud {
     this.dom.rcs.textContent = s.rcsFuel.toFixed(0);
     this.dom.gaugeRcs.style.width = `${rcsFrac * 100}%`;
 
-    const gravity = runtime.diagnostics?.gravity ?? 1.62;
+    const gravity = runtime.diagnostics?.gravity ?? LUNAR_GRAVITY;
     const twr = (runtime.diagnostics?.thrustAccel ?? 0) / gravity;
     this.dom.twr.textContent = twr.toFixed(2);
     this.dom.mass.textContent = s.mass.toFixed(0);
