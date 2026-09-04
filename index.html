@@ -1,0 +1,691 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Lunar Mission Simulator</title>
+    <link rel="stylesheet" href="/style.css" />
+  </head>
+  <body>
+    <canvas id="scene"></canvas>
+
+    <div id="ui-root">
+      <!-- ================= LOADING ================= -->
+      <section id="screen-loading" class="screen overlay center">
+        <div class="panel loading-panel">
+          <div class="mission-tag">Lunar Surface Operations</div>
+          <h1 class="title">Lunar Mission<span>Simulator</span></h1>
+          <div class="load-status" id="load-status">Generating terrain…</div>
+          <div class="load-track"><div class="load-fill" id="load-fill"></div></div>
+        </div>
+      </section>
+
+      <!-- ================= MAIN MENU ================= -->
+      <section id="screen-menu" class="screen overlay center hidden">
+        <div class="menu-wrap">
+          <div class="mission-tag">Lunar Surface Operations · Descent Trainer</div>
+          <h1 class="title">Lunar Mission<span>Simulator</span></h1>
+          <p class="tagline">
+            Hand-flown descent under 1.62 m/s&sup2;. Throttleable engine, reaction-control
+            attitude, finite propellant. Six sites, no second chances.
+          </p>
+          <div class="menu-actions">
+            <button id="btn-campaign" class="btn-primary">Fly the Full Mission</button>
+            <button id="btn-launch" class="btn-ghost">Launch Only</button>
+            <button id="btn-fly" class="btn-ghost">Lunar Descent</button>
+            <button id="btn-controls" class="btn-ghost">Controls</button>
+            <button id="btn-settings" class="btn-ghost">Graphics</button>
+          </div>
+          <p class="menu-note">
+            The full mission runs pad to surface in one flight: Saturn V ascent to a
+            parking orbit, trans-lunar injection and the coast, then the landing.
+          </p>
+          <div class="menu-foot">
+            <span><b>Space</b> main engine</span>
+            <span><b>W A S D</b> attitude</span>
+            <span><b>Shift / Ctrl</b> throttle</span>
+            <span><b>C</b> camera</span>
+          </div>
+        </div>
+      </section>
+
+      <!-- ================= LEVEL SELECT ================= -->
+      <section id="screen-sites" class="screen overlay hidden">
+        <div class="sites-head">
+          <div>
+            <div class="mission-tag">Mission Board</div>
+            <h2 class="heading">Landing Sites</h2>
+          </div>
+          <div class="sites-head-right">
+            <div class="stat-chip"><span id="sites-progress">0 / 6</span> sites landed</div>
+            <button id="btn-sites-back" class="btn-ghost small">Back</button>
+          </div>
+        </div>
+        <div id="site-grid" class="site-grid"></div>
+      </section>
+
+      <!-- ================= FLIGHT HUD ================= -->
+      <section id="screen-hud" class="screen hud hidden">
+        <!-- Top bar -->
+        <div class="hud-topbar">
+          <div class="hud-block">
+            <span class="hud-mini-label">Site</span>
+            <span id="hud-site" class="hud-mini-value">—</span>
+          </div>
+          <div class="hud-block hud-timer">
+            <span class="hud-mini-label">MET</span>
+            <span id="hud-met" class="hud-mini-value mono">00:00.0</span>
+          </div>
+          <div class="hud-block">
+            <span class="hud-mini-label">Camera</span>
+            <span id="hud-camera" class="hud-mini-value">Chase</span>
+          </div>
+        </div>
+
+        <!-- Primary flight data, left -->
+        <div class="hud-panel hud-left">
+          <div class="panel-label">Flight Data</div>
+
+          <div class="readout readout-big">
+            <span class="readout-label">ALT</span>
+            <span class="readout-value mono" id="hud-alt">000.0</span>
+            <span class="readout-unit">m</span>
+          </div>
+
+          <div class="readout" id="row-vs">
+            <span class="readout-label">V/S</span>
+            <span class="readout-value mono" id="hud-vs">0.00</span>
+            <span class="readout-unit">m/s</span>
+          </div>
+          <div class="gauge"><div class="gauge-fill" id="gauge-vs"></div><div class="gauge-limit" id="limit-vs"></div></div>
+
+          <div class="readout" id="row-hs">
+            <span class="readout-label">DRIFT</span>
+            <span class="readout-value mono" id="hud-hs">0.00</span>
+            <span class="readout-unit">m/s</span>
+          </div>
+          <div class="gauge"><div class="gauge-fill" id="gauge-hs"></div><div class="gauge-limit" id="limit-hs"></div></div>
+
+          <div class="readout" id="row-tilt">
+            <span class="readout-label">TILT</span>
+            <span class="readout-value mono" id="hud-tilt">0.0</span>
+            <span class="readout-unit">deg</span>
+          </div>
+          <div class="gauge"><div class="gauge-fill" id="gauge-tilt"></div><div class="gauge-limit" id="limit-tilt"></div></div>
+
+          <div class="readout-split">
+            <div><span class="readout-label">RANGE</span><span class="mono" id="hud-range">0</span> m</div>
+            <div><span class="readout-label">G</span><span class="mono" id="hud-gravity">1.62</span></div>
+          </div>
+        </div>
+
+        <!-- Propulsion, right -->
+        <div class="hud-panel hud-right">
+          <div class="panel-label">Propulsion</div>
+
+          <div class="readout">
+            <span class="readout-label">DPS PROP</span>
+            <span class="readout-value mono" id="hud-fuel">000</span>
+            <span class="readout-unit">kg</span>
+          </div>
+          <div class="gauge gauge-tall"><div class="gauge-fill fuel" id="gauge-fuel"></div></div>
+
+          <div class="readout">
+            <span class="readout-label">THROTTLE</span>
+            <span class="readout-value mono" id="hud-throttle">0</span>
+            <span class="readout-unit">%</span>
+          </div>
+          <div class="gauge gauge-tall">
+            <div class="gauge-fill throttle" id="gauge-throttle"></div>
+            <div class="gauge-mark" id="mark-min-throttle"></div>
+          </div>
+
+          <div class="readout">
+            <span class="readout-label">RCS</span>
+            <span class="readout-value mono" id="hud-rcs">00</span>
+            <span class="readout-unit">kg</span>
+          </div>
+          <div class="gauge"><div class="gauge-fill rcs" id="gauge-rcs"></div></div>
+
+          <div class="readout-split">
+            <div><span class="readout-label">THR/W</span><span class="mono" id="hud-twr">0.00</span></div>
+            <div><span class="readout-label">MASS</span><span class="mono" id="hud-mass">0</span> kg</div>
+          </div>
+
+          <div class="mode-row">
+            <div class="mode-pill" id="pill-sas">ATT HOLD</div>
+            <div class="mode-pill" id="pill-engine">ENGINE</div>
+          </div>
+        </div>
+
+        <!-- Attitude + landing point designator -->
+        <div class="hud-instruments">
+          <svg id="attitude-indicator" viewBox="0 0 200 200" class="instrument">
+            <defs>
+              <radialGradient id="attGlow" cx="50%" cy="50%" r="50%">
+                <stop offset="70%" stop-color="rgba(0,0,0,0)" />
+                <stop offset="100%" stop-color="rgba(0,0,0,0.55)" />
+              </radialGradient>
+            </defs>
+            <circle cx="100" cy="100" r="94" class="inst-bg" />
+            <circle id="att-safe" cx="100" cy="100" r="40" class="inst-safe" />
+            <g class="inst-grid">
+              <circle cx="100" cy="100" r="30" />
+              <circle cx="100" cy="100" r="60" />
+              <circle cx="100" cy="100" r="88" />
+              <line x1="100" y1="6" x2="100" y2="30" />
+              <line x1="100" y1="170" x2="100" y2="194" />
+              <line x1="6" y1="100" x2="30" y2="100" />
+              <line x1="170" y1="100" x2="194" y2="100" />
+            </g>
+            <!-- Pad bearing needle -->
+            <g id="att-pad-needle">
+              <polygon points="100,14 95,28 105,28" class="inst-pad" />
+            </g>
+            <!-- Tilt marker -->
+            <g id="att-marker">
+              <circle cx="100" cy="100" r="7" class="inst-marker" />
+              <line x1="100" y1="100" x2="100" y2="100" class="inst-marker-line" />
+            </g>
+            <!-- Vehicle reference -->
+            <g class="inst-ref">
+              <line x1="82" y1="100" x2="94" y2="100" />
+              <line x1="106" y1="100" x2="118" y2="100" />
+              <circle cx="100" cy="100" r="2.5" />
+            </g>
+            <circle cx="100" cy="100" r="94" fill="url(#attGlow)" />
+            <text x="100" y="188" class="inst-caption">ATTITUDE</text>
+          </svg>
+
+          <svg id="lpd-indicator" viewBox="0 0 200 200" class="instrument">
+            <circle cx="100" cy="100" r="94" class="inst-bg" />
+            <g class="inst-grid">
+              <line x1="100" y1="12" x2="100" y2="188" />
+              <line x1="12" y1="100" x2="188" y2="100" />
+              <circle cx="100" cy="100" r="30" />
+              <circle cx="100" cy="100" r="62" />
+            </g>
+            <!-- Pad position relative to vehicle -->
+            <g id="lpd-pad">
+              <circle cx="100" cy="100" r="9" class="lpd-padmark" />
+              <circle cx="100" cy="100" r="3" class="lpd-padcore" />
+            </g>
+            <!-- Horizontal velocity vector -->
+            <line id="lpd-vel" x1="100" y1="100" x2="100" y2="100" class="lpd-vel" />
+            <circle id="lpd-vel-tip" cx="100" cy="100" r="3.5" class="lpd-vel-tip" />
+            <g class="inst-ref">
+              <circle cx="100" cy="100" r="2.5" />
+            </g>
+            <text x="100" y="188" class="inst-caption">DRIFT / PAD</text>
+          </svg>
+        </div>
+
+        <!-- Caution and warning panel -->
+        <div class="hud-cw">
+          <div class="cw-light" id="cw-contact">CONTACT</div>
+          <div class="cw-light" id="cw-fuel">PROP LOW</div>
+          <div class="cw-light" id="cw-vel">VELOCITY</div>
+          <div class="cw-light" id="cw-att">ATTITUDE</div>
+          <div class="cw-light" id="cw-rcs">RCS LOW</div>
+          <div class="cw-light" id="cw-vent">DISTURBANCE</div>
+        </div>
+
+        <!-- Off-screen pad locator -->
+        <div id="pad-locator" class="pad-locator hidden">
+          <div class="pad-locator-arrow">▲</div>
+          <div class="pad-locator-range mono">0 m</div>
+        </div>
+
+        <div class="hud-hint" id="hud-hint"></div>
+      </section>
+
+      <!-- ================= PAUSE ================= -->
+      <section id="screen-pause" class="screen overlay center hidden">
+        <div class="panel">
+          <div class="mission-tag">Simulation Held</div>
+          <h2 class="heading">Paused</h2>
+          <div class="menu-actions column">
+            <button id="btn-resume" class="btn-primary">Resume</button>
+            <!-- Label and visibility are set per phase in Game.setPaused: the
+                 pause menu must never offer to restart or abort into a phase
+                 other than the one being flown. -->
+            <button id="btn-pause-restart" class="btn-ghost">Restart</button>
+            <button id="btn-pause-controls" class="btn-ghost">Controls</button>
+            <button id="btn-pause-quit" class="btn-ghost">Abort to Mission Board</button>
+            <button id="btn-pause-menu" class="btn-ghost">Main Menu</button>
+          </div>
+        </div>
+      </section>
+
+      <!-- ================= CONTROLS ================= -->
+      <section id="screen-help" class="screen overlay center hidden">
+        <div class="panel wide">
+          <div class="mission-tag">Crew Procedures</div>
+          <h2 class="heading">Controls</h2>
+          <div class="help-grid">
+            <div class="help-col">
+              <h3>Propulsion</h3>
+              <div class="key-row"><kbd>Space</kbd><span>Main engine — full thrust while held</span></div>
+              <div class="key-row"><kbd>Shift</kbd><span>Throttle up</span></div>
+              <div class="key-row"><kbd>Ctrl</kbd><span>Throttle down</span></div>
+              <div class="key-row"><kbd>Z</kbd><span>Throttle to 100%</span></div>
+              <div class="key-row"><kbd>X</kbd><span>Engine cut-off</span></div>
+              <h3>Attitude (RCS)</h3>
+              <div class="key-row"><kbd>W</kbd><kbd>S</kbd><span>Pitch forward / back</span></div>
+              <div class="key-row"><kbd>A</kbd><kbd>D</kbd><span>Roll left / right</span></div>
+              <div class="key-row"><kbd>Q</kbd><kbd>E</kbd><span>Yaw left / right</span></div>
+              <div class="key-row"><kbd>T</kbd><span>Attitude hold on / off</span></div>
+              <div class="key-row"><kbd>↑↓←→</kbd><span>RCS translation (fine drift trim)</span></div>
+            </div>
+            <div class="help-col">
+              <h3>View</h3>
+              <div class="key-row"><kbd>C</kbd><kbd>V</kbd><span>Next / previous camera</span></div>
+              <div class="key-row"><kbd>Drag</kbd><span>Swing the camera around the vehicle</span></div>
+              <div class="key-row"><kbd>Wheel</kbd><span>Zoom in / out</span></div>
+              <p class="help-note">
+                Mouse-drag works in every view and in every phase. Views that orbit the
+                vehicle swing around it; fixed and mounted views — the pad cameras and the
+                cockpit — pan their look instead. Switching camera resets the swing.
+              </p>
+              <h3>Mission</h3>
+              <div class="key-row"><kbd>R</kbd><span>Restart descent</span></div>
+              <div class="key-row"><kbd>P</kbd><kbd>Esc</kbd><span>Pause</span></div>
+              <div class="key-row"><kbd>M</kbd><span>Mute audio</span></div>
+              <div class="key-row"><kbd>H</kbd><span>This screen</span></div>
+              <h3>How to land it</h3>
+              <p class="help-note">
+                Thrust comes out of the <em>top</em> of the lander, so leaning is how you
+                steer — and <kbd>S</kbd> is the brake. Lean back with <kbd>S</kbd> while
+                holding <kbd>Space</kbd> to kill forward drift; <kbd>A</kbd> and
+                <kbd>D</kbd> push you left and right.
+              </p>
+              <p class="help-note">
+                Attitude hold caps the lean at 45° and flies you back upright the moment
+                you release the key, so you cannot flip over. The order that works:
+                <em>kill the drift first, high up</em>, then get over the pad, then bring
+                the descent rate under the gear limit. Arriving fast and sideways is what
+                breaks the vehicle. The amber needle on the DRIFT dial is the direction you
+                are sliding — lean the opposite way until it centres.
+              </p>
+            </div>
+          </div>
+
+          <div class="help-grid help-ascent">
+            <div class="help-col">
+              <h3>Launch &amp; Ascent</h3>
+              <div class="key-row"><kbd>Shift</kbd><kbd>Ctrl</kbd><span>Throttle up / down</span></div>
+              <div class="key-row"><kbd>W</kbd><kbd>S</kbd><span>Pitch bias off the gravity-turn program</span></div>
+              <div class="key-row"><kbd>Space</kbd><span>Stage separation</span></div>
+              <div class="key-row"><kbd>I</kbd><span>Engine cut-off &amp; orbit insertion</span></div>
+              <div class="key-row"><kbd>,</kbd><kbd>.</kbd><span>Time warp down / up (1× to 8×)</span></div>
+              <div class="key-row"><kbd>C</kbd><kbd>V</kbd><span>Pad, tracker, chase, onboard, forward cameras</span></div>
+            </div>
+            <div class="help-col">
+              <h3>Trans-Lunar Coast</h3>
+              <div class="key-row"><kbd>Space</kbd><span>Hold to burn (TLI and lunar orbit insertion)</span></div>
+              <div class="key-row"><kbd>I</kbd><span>Engine cut-off</span></div>
+              <div class="key-row"><kbd>,</kbd><kbd>.</kbd><span>Time warp — works during burns too</span></div>
+              <div class="key-row"><kbd>K</kbd><span>Skip the rest of the crossing</span></div>
+              <div class="key-row"><kbd>C</kbd><kbd>V</kbd><span>Stack, Earth, Moon and engine cameras</span></div>
+              <p class="help-note">
+                Both burns are graded on <em>&Delta;V</em>: hold the engine until the gauge
+                is between the two gates, then cut off with <kbd>I</kbd>. Overburning is as
+                bad as underburning. Time warp cancels itself as the band approaches, so
+                you will not blow through it.
+              </p>
+
+              <h3>How to reach orbit</h3>
+              <p class="help-note">
+                Hold the pitch needle on the commanded mark — that is the gravity turn.
+                Through <em>max-Q</em> around 13 km, throttle back so dynamic pressure stays
+                off the red; large angle of attack in thick air will break the vehicle.
+                Stage as soon as a tank runs dry. In the upper stages, flatten out and build
+                horizontal speed — altitude alone is not orbit. Cut off with <em>I</em> when
+                altitude, horizontal velocity <em>and</em> flight path angle are all inside
+                the insertion window.
+              </p>
+            </div>
+          </div>
+          <div class="menu-actions">
+            <button id="btn-help-close" class="btn-primary">Close</button>
+          </div>
+        </div>
+      </section>
+
+      <!-- ================= SETTINGS ================= -->
+      <section id="screen-settings" class="screen overlay center hidden">
+        <div class="panel">
+          <div class="mission-tag">Display</div>
+          <h2 class="heading">Graphics</h2>
+          <div class="settings-list">
+            <label class="setting-row">
+              <span>Quality</span>
+              <select id="set-quality">
+                <option value="low">Low — best performance</option>
+                <option value="medium">Medium</option>
+                <option value="high">High — full effects</option>
+              </select>
+            </label>
+            <label class="setting-row">
+              <span>Bloom</span>
+              <input type="checkbox" id="set-bloom" checked />
+            </label>
+            <label class="setting-row">
+              <span>Film grain &amp; vignette</span>
+              <input type="checkbox" id="set-grade" checked />
+            </label>
+            <label class="setting-row">
+              <span>Antialiasing</span>
+              <input type="checkbox" id="set-aa" checked />
+            </label>
+            <label class="setting-row">
+              <span>Particle density</span>
+              <select id="set-particles">
+                <option value="0.5">Reduced</option>
+                <option value="1">Normal</option>
+                <option value="1.6">Heavy</option>
+              </select>
+            </label>
+          </div>
+          <div class="menu-actions">
+            <button id="btn-settings-close" class="btn-primary">Done</button>
+          </div>
+        </div>
+      </section>
+
+      <!-- ================= DEBRIEF ================= -->
+      <section id="screen-result" class="screen overlay center hidden">
+        <div class="panel wide">
+          <div class="mission-tag" id="result-tag">Mission Report</div>
+          <h2 class="heading" id="result-title">Touchdown</h2>
+          <p class="result-reason" id="result-reason"></p>
+
+          <div class="result-score">
+            <div class="score-ring">
+              <svg viewBox="0 0 120 120">
+                <circle cx="60" cy="60" r="52" class="score-track" />
+                <circle cx="60" cy="60" r="52" class="score-arc" id="score-arc" />
+              </svg>
+              <div class="score-value"><span id="result-score">0</span><small>score</small></div>
+            </div>
+            <div class="result-table" id="result-table"></div>
+          </div>
+
+          <div class="result-best" id="result-best"></div>
+
+          <div class="menu-actions">
+            <button id="btn-retry" class="btn-primary">Fly It Again</button>
+            <button id="btn-next" class="btn-ghost">Next Site</button>
+            <button id="btn-result-board" class="btn-ghost">Mission Board</button>
+          </div>
+        </div>
+      </section>
+
+      <!-- ================= COUNTDOWN (Phase 2) ================= -->
+      <section id="screen-countdown" class="screen countdown-screen hidden">
+        <div class="countdown-box">
+          <div id="countdown-number">T-10</div>
+          <div id="countdown-callout">Terminal count</div>
+        </div>
+      </section>
+
+      <!-- ================= ASCENT HUD (Phase 2) ================= -->
+      <section id="screen-ascent-hud" class="screen hud hidden">
+        <div class="hud-topbar">
+          <div class="hud-block">
+            <span class="hud-mini-label">Vehicle</span>
+            <span class="hud-mini-value">Saturn V</span>
+          </div>
+          <div class="hud-block hud-timer">
+            <span class="hud-mini-label">MET</span>
+            <span id="asc-met" class="hud-mini-value mono">T-10.0</span>
+          </div>
+          <div class="hud-block">
+            <span class="hud-mini-label">Phase</span>
+            <span id="asc-phase" class="hud-mini-value">Terminal count</span>
+          </div>
+          <div class="hud-block">
+            <span class="hud-mini-label">Warp</span>
+            <span id="asc-timescale" class="hud-mini-value mono">1×</span>
+          </div>
+          <div class="hud-block">
+            <span class="hud-mini-label">Camera</span>
+            <span id="asc-camera" class="hud-mini-value">Pad Cam</span>
+          </div>
+        </div>
+
+        <!-- Trajectory -->
+        <div class="hud-panel hud-left">
+          <div class="panel-label">Trajectory</div>
+          <div class="readout readout-big">
+            <span class="readout-label">ALT</span>
+            <span class="readout-value mono" id="asc-altitude">0</span>
+            <span class="readout-unit">m</span>
+          </div>
+          <div class="readout">
+            <span class="readout-label">SPEED</span>
+            <span class="readout-value mono" id="asc-speed">0</span>
+            <span class="readout-unit">m/s</span>
+          </div>
+          <div class="readout">
+            <span class="readout-label">VERT</span>
+            <span class="readout-value mono" id="asc-vspeed">0</span>
+            <span class="readout-unit">m/s</span>
+          </div>
+          <div class="readout">
+            <span class="readout-label">HORIZ</span>
+            <span class="readout-value mono" id="asc-hspeed">0</span>
+            <span class="readout-unit">m/s</span>
+          </div>
+          <div class="readout-split">
+            <div><span class="readout-label">RANGE</span><span class="mono" id="asc-downrange">0 m</span></div>
+            <div><span class="readout-label">MACH</span><span class="mono" id="asc-mach">0.00</span></div>
+          </div>
+
+          <div class="panel-label" style="margin-top:12px">Aerodynamics</div>
+          <div class="readout">
+            <span class="readout-label">MAX-Q</span>
+            <span class="readout-value mono" id="asc-q">0.0</span>
+            <span class="readout-unit">kPa</span>
+          </div>
+          <div class="gauge"><div class="gauge-fill" id="gauge-asc-q"></div></div>
+          <div class="readout">
+            <span class="readout-label">AoA</span>
+            <span class="readout-value mono" id="asc-aoa">0.0</span>
+            <span class="readout-unit">deg</span>
+          </div>
+          <div class="gauge"><div class="gauge-fill" id="gauge-asc-aoa"></div></div>
+        </div>
+
+        <!-- Propulsion -->
+        <div class="hud-panel hud-right">
+          <div class="panel-label">Propulsion</div>
+          <div class="readout">
+            <span class="readout-label">STAGE</span>
+            <span class="readout-value mono" id="asc-stage">S-IC</span>
+          </div>
+          <div class="readout">
+            <span class="readout-label">PROP</span>
+            <span class="readout-value mono" id="asc-stage-prop">0 t</span>
+          </div>
+          <div class="gauge gauge-tall"><div class="gauge-fill fuel" id="gauge-asc-prop"></div></div>
+
+          <div class="readout">
+            <span class="readout-label">THROTTLE</span>
+            <span class="readout-value mono" id="asc-throttle">0</span>
+            <span class="readout-unit">%</span>
+          </div>
+          <div class="gauge gauge-tall"><div class="gauge-fill throttle" id="gauge-asc-throttle"></div></div>
+
+          <div class="readout">
+            <span class="readout-label">ACCEL</span>
+            <span class="readout-value mono" id="asc-accel">1.00</span>
+            <span class="readout-unit">g</span>
+          </div>
+          <div class="gauge"><div class="gauge-fill" id="gauge-asc-accel"></div></div>
+
+          <div class="readout-split">
+            <div><span class="readout-label">T/W</span><span class="mono" id="asc-twr">0.00</span></div>
+            <div><span class="readout-label">MASS</span><span class="mono" id="asc-mass">0 t</span></div>
+          </div>
+        </div>
+
+        <!-- Pitch tape -->
+        <div class="pitch-tape">
+          <div class="pitch-track">
+            <div class="pitch-mark" style="top:0%"><span>90</span></div>
+            <div class="pitch-mark" style="top:33%"><span>60</span></div>
+            <div class="pitch-mark" style="top:66%"><span>30</span></div>
+            <div class="pitch-mark" style="top:100%"><span>0</span></div>
+            <div id="pitch-cmd-needle" class="pitch-needle cmd"></div>
+            <div id="pitch-needle" class="pitch-needle actual"></div>
+          </div>
+          <div class="pitch-values">
+            <div><span class="readout-label">PITCH</span><span class="mono" id="asc-pitch">90.0°</span></div>
+            <div><span class="readout-label">CMD</span><span class="mono cmd-value" id="asc-pitch-cmd">90.0°</span></div>
+          </div>
+        </div>
+
+        <!-- Insertion cue -->
+        <div id="insertion-panel" class="insertion-panel">
+          <div class="panel-label">Insertion Window</div>
+          <div class="insertion-track"><div id="insertion-fill" class="insertion-fill"></div></div>
+          <div class="insertion-pills">
+            <div class="ins-pill"><span class="ins-label">ALT</span><span id="insertion-alt" class="ins-value">0 km</span></div>
+            <div class="ins-pill"><span class="ins-label">HORIZ V</span><span id="insertion-spd" class="ins-value">0 m/s</span></div>
+            <div class="ins-pill"><span class="ins-label">FPA</span><span id="insertion-fpa" class="ins-value">0°</span></div>
+          </div>
+          <div class="insertion-hint">Press <kbd>I</kbd> to cut off and insert</div>
+        </div>
+
+        <!-- Caution and warning -->
+        <div class="hud-cw ascent-cw">
+          <div class="cw-light" id="asc-cw-stage">STAGE</div>
+          <div class="cw-light" id="asc-cw-q">MAX-Q</div>
+          <div class="cw-light" id="asc-cw-aoa">ANGLE</div>
+          <div class="cw-light" id="asc-cw-g">G-LOAD</div>
+          <div class="cw-light" id="asc-cw-prop">PROP LOW</div>
+          <div class="cw-light" id="asc-cw-insert">INSERT</div>
+        </div>
+
+        <!-- Flight event log -->
+        <div id="asc-log" class="asc-log"></div>
+
+        <div class="hud-hint" id="asc-hint"></div>
+      </section>
+
+      <!-- ================= COAST HUD (Phase 3) ================= -->
+      <section id="screen-coast-hud" class="screen hud hidden">
+        <div class="hud-topbar">
+          <div class="hud-block">
+            <span class="hud-mini-label">Stack</span>
+            <span class="hud-mini-value">CSM / LM</span>
+          </div>
+          <div class="hud-block hud-timer">
+            <span class="hud-mini-label">Elapsed</span>
+            <span id="coast-met" class="hud-mini-value mono">00:00.0</span>
+          </div>
+          <div class="hud-block">
+            <span class="hud-mini-label">Phase</span>
+            <span id="coast-phase" class="hud-mini-value">Parking Orbit</span>
+          </div>
+          <div class="hud-block">
+            <span class="hud-mini-label">Warp</span>
+            <span id="coast-timescale" class="hud-mini-value mono">1×</span>
+          </div>
+        </div>
+
+        <!-- Burn gauge -->
+        <div id="coast-burn-panel" class="coast-burn-panel hidden">
+          <div class="panel-label" id="coast-burn-label">TLI BURN · ΔV</div>
+          <div class="coast-dv-row">
+            <span class="coast-dv-value mono" id="coast-dv">0</span>
+            <span class="coast-dv-unit">m/s</span>
+            <span class="coast-dv-target mono" id="coast-dv-target">0–0 m/s</span>
+          </div>
+          <div class="coast-dv-track" id="coast-dv-track">
+            <div class="coast-dv-fill" id="coast-dv-fill"></div>
+            <div class="coast-band-mark" id="coast-band-lo"></div>
+            <div class="coast-band-mark hi" id="coast-band-hi"></div>
+          </div>
+          <div class="coast-burn-hint" id="coast-burn-hint">Hold SPACE to burn</div>
+        </div>
+
+        <!-- Journey progress -->
+        <div id="coast-journey-panel" class="coast-journey-panel hidden">
+          <div class="panel-label">Earth → Moon</div>
+          <div class="coast-journey-track">
+            <div class="coast-journey-fill" id="coast-journey-fill"></div>
+          </div>
+          <div class="coast-journey-row">
+            <span>Earth</span>
+            <span class="mono" id="coast-journey-pct">0%</span>
+            <span>Moon</span>
+          </div>
+          <div class="coast-journey-hint">
+            <kbd>,</kbd><kbd>.</kbd> time warp · <kbd>K</kbd> skip coast
+          </div>
+        </div>
+
+        <div id="coast-log" class="asc-log"></div>
+        <div class="hud-hint" id="coast-hint"></div>
+      </section>
+
+      <!-- ================= COAST DEBRIEF ================= -->
+      <section id="screen-coast-result" class="screen overlay center hidden">
+        <div class="panel wide">
+          <div class="mission-tag" id="coast-result-tag">Translunar Report</div>
+          <h2 class="heading" id="coast-result-title">In Lunar Orbit</h2>
+          <p class="result-reason" id="coast-result-reason"></p>
+
+          <div class="result-score">
+            <div class="score-ring">
+              <svg viewBox="0 0 120 120">
+                <circle cx="60" cy="60" r="52" class="score-track" />
+                <circle cx="60" cy="60" r="52" class="score-arc" id="coast-score-arc" />
+              </svg>
+              <div class="score-value"><span id="coast-result-score">0</span><small>score</small></div>
+            </div>
+            <div class="result-table" id="coast-result-table"></div>
+          </div>
+
+          <div class="menu-actions">
+            <button id="btn-coast-descend" class="btn-primary">Undock &amp; Descend</button>
+            <button id="btn-coast-retry" class="btn-ghost">Fly It Again</button>
+            <button id="btn-coast-menu" class="btn-ghost">Main Menu</button>
+          </div>
+        </div>
+      </section>
+
+      <!-- ================= ASCENT DEBRIEF ================= -->
+      <section id="screen-ascent-result" class="screen overlay center hidden">
+        <div class="panel wide">
+          <div class="mission-tag" id="asc-result-tag">Flight Report</div>
+          <h2 class="heading" id="asc-result-title">Orbit Achieved</h2>
+          <p class="result-reason" id="asc-result-reason"></p>
+
+          <div class="result-score">
+            <div class="score-ring">
+              <svg viewBox="0 0 120 120">
+                <circle cx="60" cy="60" r="52" class="score-track" />
+                <circle cx="60" cy="60" r="52" class="score-arc" id="asc-score-arc" />
+              </svg>
+              <div class="score-value"><span id="asc-result-score">0</span><small>score</small></div>
+            </div>
+            <div class="result-table" id="asc-result-table"></div>
+          </div>
+
+          <div class="result-best" id="asc-result-best"></div>
+
+          <div class="menu-actions">
+            <button id="btn-asc-retry" class="btn-primary">Fly It Again</button>
+            <button id="btn-asc-descent" class="btn-ghost">Continue to Descent</button>
+            <button id="btn-asc-menu" class="btn-ghost">Main Menu</button>
+          </div>
+        </div>
+      </section>
+    </div>
+
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>
