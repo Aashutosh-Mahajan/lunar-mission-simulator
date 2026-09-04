@@ -1,0 +1,385 @@
+import * as THREE from "three";
+import { makeRng } from "../materials/noise.js";
+
+// ---------------------------------------------------------------------------
+// Launch Complex 39A: the mobile launcher platform, the umbilical tower with
+// its swing arms, the flame trench and deflector, and the surrounding coastal
+// terrain.
+//
+// This exists for the first few kilometres of flight — it is what gives the
+// liftoff a sense of scale — and is faded out once the vehicle is high enough
+// that it would be a couple of pixels.
+// ---------------------------------------------------------------------------
+
+const TOWER_HEIGHT = 120;
+const PLATFORM_SIZE = 49;
+
+export default class LaunchComplex {
+  constructor(scene, assets, mission) {
+    this.scene = scene;
+    this.assets = assets;
+    this.mission = mission;
+    this.rng = makeRng(39061969);
+
+    this.group = new THREE.Group();
+    this.group.name = "launchComplex";
+    scene.add(this.group);
+
+    this._buildMaterials();
+    this._buildGround();
+    this._buildPlatform();
+    this._buildTower();
+    this._buildFlameTrench();
+    this._buildSupport();
+
+    this.group.traverse((o) => {
+      if (o.isMesh) {
+        o.castShadow = true;
+        o.receiveShadow = true;
+      }
+    });
+  }
+
+  _buildMaterials() {
+    const a = this.assets;
+    this.steel = new THREE.MeshStandardMaterial({
+      color: 0x8a8f94,
+      metalness: 0.78,
+      roughness: 0.46,
+      map: a.panel.map,
+      normalMap: a.panel.normalMap,
+      roughnessMap: a.panel.roughnessMap,
+    });
+    this.paintedSteel = new THREE.MeshStandardMaterial({
+      color: 0x9d3f2c, // the tower's oxide-red structural paint
+      metalness: 0.35,
+      roughness: 0.66,
+      map: a.panel.map,
+      normalMap: a.panel.normalMap,
+    });
+    this.concrete = new THREE.MeshStandardMaterial({
+      color: 0x8e8b84,
+      metalness: 0.02,
+      roughness: 0.94,
+      map: a.regolith.map,
+      normalMap: a.regolith.normalMap,
+    });
+    this.darkSteel = new THREE.MeshStandardMaterial({
+      color: 0x3c4045,
+      metalness: 0.6,
+      roughness: 0.6,
+    });
+  }
+
+  /**
+   * The pad's local ground: a concrete apron ringed by Florida scrub and
+   * water, out to the point where the sky scene's Earth takes over.
+   */
+  _buildGround() {
+    // Concrete apron.
+    const apron = new THREE.Mesh(
+      new THREE.CircleGeometry(260, 48),
+      this.concrete
+    );
+    apron.rotation.x = -Math.PI / 2;
+    apron.position.y = 0.05;
+    apron.receiveShadow = true;
+    this.group.add(apron);
+
+    // Surrounding terrain out to the horizon. Kept simple and large — at
+    // altitude it reads as coastline, and it fades out before the detail
+    // would be missed.
+    const groundGeo = new THREE.CircleGeometry(26000, 64);
+    groundGeo.rotateX(-Math.PI / 2);
+    const pos = groundGeo.attributes.position;
+    const colors = new Float32Array(pos.count * 3);
+    const c = new THREE.Color();
+    for (let i = 0; i < pos.count; i++) {
+      const x = pos.getX(i);
+      const z = pos.getZ(i);
+      const r = Math.hypot(x, z);
+      // Land to the west of the pad, ocean to the east — the Cape's geometry,
+      // and the reason launches fly out over water.
+      const ocean = x > 900 + Math.sin(z * 0.0004) * 700;
+      if (ocean) {
+        const depth = THREE.MathUtils.clamp((x - 900) / 9000, 0, 1);
+        c.setRGB(0.045 + depth * 0.01, 0.11 + depth * 0.05, 0.19 + depth * 0.1);
+      } else {
+        const scrub = 0.5 + Math.sin(x * 0.0009) * 0.2 + Math.cos(z * 0.0011) * 0.2;
+        c.setRGB(0.14 + scrub * 0.1, 0.17 + scrub * 0.12, 0.1 + scrub * 0.05);
+      }
+      // Haze toward the horizon.
+      const haze = THREE.MathUtils.clamp(r / 26000, 0, 1);
+      c.lerp(new THREE.Color(0x9fb4c8), haze * 0.75);
+      colors[i * 3] = c.r;
+      colors[i * 3 + 1] = c.g;
+      colors[i * 3 + 2] = c.b;
+    }
+    groundGeo.setAttribute("color", new THREE.BufferAttribute(colors, 3));
+
+    this.groundMaterial = new THREE.MeshBasicMaterial({
+      vertexColors: true,
+      transparent: true,
+      opacity: 1,
+      depthWrite: true,
+    });
+    this.ground = new THREE.Mesh(groundGeo, this.groundMaterial);
+    this.ground.position.y = -0.4;
+    this.group.add(this.ground);
+  }
+
+  /** Mobile launcher platform: the two-storey steel base with its exhaust hole. */
+  _buildPlatform() {
+    const platform = new THREE.Group();
+    platform.position.y = 0;
+
+    // Deck with a square hole for the exhaust, built as four slabs.
+    const holeHalf = 9;
+    const half = PLATFORM_SIZE / 2;
+    const deckThickness = 7.6;
+    const slabs = [
+      [(-half - -holeHalf) / 2 - holeHalf / 2 - (half - holeHalf) / 2, PLATFORM_SIZE],
+    ];
+    void slabs;
+
+    const makeSlab = (w, d, x, z) => {
+      const slab = new THREE.Mesh(new THREE.BoxGeometry(w, deckThickness, d), this.steel);
+      slab.position.set(x, deckThickness / 2, z);
+      platform.add(slab);
+    };
+    const side = (half - holeHalf) / 2;
+    makeSlab(PLATFORM_SIZE, side * 2, 0, holeHalf + side);
+    makeSlab(PLATFORM_SIZE, side * 2, 0, -holeHalf - side);
+    makeSlab(side * 2, holeHalf * 2, holeHalf + side, 0);
+    makeSlab(side * 2, holeHalf * 2, -holeHalf - side, 0);
+
+    // Hold-down arms around the exhaust hole.
+    for (let i = 0; i < 4; i++) {
+      const ang = (i / 4) * Math.PI * 2 + Math.PI / 4;
+      const arm = new THREE.Mesh(new THREE.BoxGeometry(2.2, 5.4, 2.2), this.darkSteel);
+      arm.position.set(Math.cos(ang) * 7.4, deckThickness + 2.7, Math.sin(ang) * 7.4);
+      platform.add(arm);
+    }
+
+    // Support pedestals lifting the platform above the trench.
+    for (const [px, pz] of [[-1, -1], [-1, 1], [1, -1], [1, 1]]) {
+      const ped = new THREE.Mesh(
+        new THREE.BoxGeometry(6, 6.2, 6),
+        this.concrete
+      );
+      ped.position.set(px * (half - 5), -3.1, pz * (half - 5));
+      platform.add(ped);
+    }
+
+    this.group.add(platform);
+    this.platform = platform;
+    this.deckHeight = deckThickness;
+  }
+
+  /** Launch umbilical tower with swing arms and the hammerhead crane. */
+  _buildTower() {
+    const tower = new THREE.Group();
+    tower.position.set(-30, 0, 0);
+
+    const legOffset = 5.2;
+    const legRadius = 0.55;
+
+    // Four corner columns.
+    for (const [sx, sz] of [[-1, -1], [-1, 1], [1, -1], [1, 1]]) {
+      const leg = new THREE.Mesh(
+        new THREE.CylinderGeometry(legRadius, legRadius, TOWER_HEIGHT, 10),
+        this.paintedSteel
+      );
+      leg.position.set(sx * legOffset, TOWER_HEIGHT / 2 + this.deckHeight, sz * legOffset);
+      tower.add(leg);
+    }
+
+    // Horizontal bracing every few metres, with diagonals — the open lattice
+    // is what makes the tower read as a tower rather than a slab.
+    const levels = 18;
+    for (let i = 1; i <= levels; i++) {
+      const y = this.deckHeight + (i / levels) * TOWER_HEIGHT;
+      for (const axis of ["x", "z"]) {
+        for (const s of [-1, 1]) {
+          const beam = new THREE.Mesh(
+            new THREE.BoxGeometry(
+              axis === "x" ? legOffset * 2 : 0.34,
+              0.34,
+              axis === "x" ? 0.34 : legOffset * 2
+            ),
+            this.paintedSteel
+          );
+          beam.position.set(
+            axis === "x" ? 0 : s * legOffset,
+            y,
+            axis === "x" ? s * legOffset : 0
+          );
+          tower.add(beam);
+        }
+      }
+      // Diagonals on two faces.
+      if (i < levels) {
+        const h = TOWER_HEIGHT / levels;
+        const diagLen = Math.hypot(legOffset * 2, h);
+        for (const s of [-1, 1]) {
+          const diag = new THREE.Mesh(
+            new THREE.BoxGeometry(0.26, diagLen, 0.26),
+            this.paintedSteel
+          );
+          diag.position.set(0, y + h / 2, s * legOffset);
+          diag.rotation.z = Math.atan2(legOffset * 2, h) * (i % 2 === 0 ? 1 : -1);
+          tower.add(diag);
+        }
+      }
+    }
+
+    // Swing arms reaching across to the vehicle.
+    this.swingArms = [];
+    const armHeights = [26, 44, 62, 80, 96, 108];
+    for (const h of armHeights) {
+      const arm = new THREE.Group();
+      const boom = new THREE.Mesh(new THREE.BoxGeometry(24, 1.6, 2.6), this.paintedSteel);
+      boom.position.set(12, 0, 0);
+      arm.add(boom);
+      const head = new THREE.Mesh(new THREE.BoxGeometry(3.4, 3.0, 3.4), this.darkSteel);
+      head.position.set(23, 0, 0);
+      arm.add(head);
+      arm.position.set(legOffset, this.deckHeight + h, 0);
+      tower.add(arm);
+      this.swingArms.push(arm);
+    }
+
+    // Hammerhead crane on top.
+    const crane = new THREE.Mesh(new THREE.BoxGeometry(34, 1.8, 2.2), this.paintedSteel);
+    crane.position.set(8, this.deckHeight + TOWER_HEIGHT + 3, 0);
+    tower.add(crane);
+    const mast = new THREE.Mesh(new THREE.BoxGeometry(2.2, 7, 2.2), this.paintedSteel);
+    mast.position.set(0, this.deckHeight + TOWER_HEIGHT + 3.5, 0);
+    tower.add(mast);
+
+    // Warning strobes up the tower.
+    this.strobes = [];
+    for (const h of [40, 75, 110, 124]) {
+      const mat = new THREE.MeshStandardMaterial({
+        color: 0xffffff,
+        emissive: 0xff3020,
+        emissiveIntensity: 2,
+        roughness: 0.4,
+      });
+      const lamp = new THREE.Mesh(new THREE.SphereGeometry(0.5, 10, 8), mat);
+      lamp.position.set(0, this.deckHeight + h, legOffset + 0.8);
+      tower.add(lamp);
+      this.strobes.push(mat);
+    }
+
+    this.group.add(tower);
+    this.tower = tower;
+  }
+
+  /** Flame trench and the wedge deflector that splits the exhaust. */
+  _buildFlameTrench() {
+    const trench = new THREE.Group();
+    trench.position.y = -0.1;
+
+    // Trench walls.
+    for (const s of [-1, 1]) {
+      const wall = new THREE.Mesh(new THREE.BoxGeometry(150, 12, 3), this.concrete);
+      wall.position.set(0, -6, s * 14);
+      trench.add(wall);
+    }
+    const floor = new THREE.Mesh(new THREE.BoxGeometry(150, 1.5, 28), this.concrete);
+    floor.position.set(0, -12, 0);
+    trench.add(floor);
+
+    // The deflector: a steel-clad wedge under the exhaust hole that throws
+    // the plume out both ends of the trench.
+    const wedgeShape = new THREE.Shape();
+    wedgeShape.moveTo(-13, -11);
+    wedgeShape.lineTo(13, -11);
+    wedgeShape.lineTo(0, 0);
+    wedgeShape.closePath();
+    const wedge = new THREE.Mesh(
+      new THREE.ExtrudeGeometry(wedgeShape, { depth: 26, bevelEnabled: false }),
+      this.darkSteel
+    );
+    wedge.rotation.y = Math.PI / 2;
+    wedge.position.set(13, 0, -13);
+    trench.add(wedge);
+
+    this.group.add(trench);
+    this.trench = trench;
+  }
+
+  /** Lightning masts, water towers and the surrounding pad furniture. */
+  _buildSupport() {
+    // Lightning mast on top of the tower is modelled as a tall spire.
+    const spire = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.12, 0.4, 26, 8),
+      this.steel
+    );
+    spire.position.set(-30, this.deckHeight + TOWER_HEIGHT + 19, 0);
+    this.group.add(spire);
+
+    // Water tower for the sound-suppression system.
+    const tank = new THREE.Mesh(new THREE.CylinderGeometry(6, 6, 14, 20), this.steel);
+    tank.position.set(72, 28, -58);
+    this.group.add(tank);
+    for (let i = 0; i < 4; i++) {
+      const ang = (i / 4) * Math.PI * 2 + Math.PI / 4;
+      const leg = new THREE.Mesh(new THREE.CylinderGeometry(0.5, 0.5, 22, 8), this.steel);
+      leg.position.set(72 + Math.cos(ang) * 4.5, 11, -58 + Math.sin(ang) * 4.5);
+      this.group.add(leg);
+    }
+
+    // Perimeter floodlight masts.
+    for (let i = 0; i < 6; i++) {
+      const ang = (i / 6) * Math.PI * 2;
+      const x = Math.cos(ang) * 120;
+      const z = Math.sin(ang) * 120;
+      const mast = new THREE.Mesh(new THREE.CylinderGeometry(0.35, 0.5, 24, 8), this.steel);
+      mast.position.set(x, 12, z);
+      this.group.add(mast);
+    }
+  }
+
+  /**
+   * The pad only matters for the first few kilometres. Fading it out (rather
+   * than popping it) keeps the transition to the high-altitude view smooth.
+   */
+  update(dt, altitude, elapsed) {
+    const fade = 1 - THREE.MathUtils.clamp((altitude - 2500) / 5000, 0, 1);
+    this.group.visible = fade > 0.01;
+    if (!this.group.visible) return;
+
+    this.groundMaterial.opacity = 1;
+
+    // Strobes flash asynchronously, as real obstruction lights do.
+    this.strobes.forEach((mat, i) => {
+      const phase = (elapsed * 1.1 + i * 0.37) % 1;
+      mat.emissiveIntensity = phase < 0.09 ? 9 : 0.6;
+    });
+  }
+
+  /** Swings the umbilical arms clear at liftoff. */
+  releaseArms() {
+    this._armsReleasing = true;
+  }
+
+  updateArms(dt) {
+    if (!this._armsReleasing) return;
+    let done = true;
+    for (const arm of this.swingArms) {
+      const target = -Math.PI * 0.62;
+      arm.rotation.y = THREE.MathUtils.lerp(arm.rotation.y, target, 1 - Math.exp(-2.2 * dt));
+      if (Math.abs(arm.rotation.y - target) > 0.02) done = false;
+    }
+    if (done) this._armsReleasing = false;
+  }
+
+  dispose() {
+    this.scene.remove(this.group);
+    this.group.traverse((o) => {
+      if (o.geometry) o.geometry.dispose();
+    });
+  }
+}
