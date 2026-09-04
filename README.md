@@ -7,6 +7,10 @@ descent → landing.**
 Built with Three.js and Cannon-es. No game engine, no binary assets — every texture,
 mesh and sound in the project is generated procedurally at load time.
 
+### ▶ [Play it in your browser](https://lunar-mission-simulator.vercel.app/)
+
+[![CI](https://github.com/Aashutosh-Mahajan/lunar-mission-simulator/actions/workflows/ci.yml/badge.svg)](https://github.com/Aashutosh-Mahajan/lunar-mission-simulator/actions/workflows/ci.yml)
+
 > Computer Graphics course project — T.E. Information Technology, Semester V,
 > Vidyalankar Institute of Technology, Mumbai.
 
@@ -14,6 +18,7 @@ mesh and sound in the project is generated procedurally at load time.
 
 ## Table of contents
 
+- [Play online](https://lunar-mission-simulator.vercel.app/)
 - [Quick start](#quick-start)
 - [What the game is](#what-the-game-is)
 - [Controls](#controls)
@@ -359,6 +364,24 @@ look fake. The shader keeps it dark and lets the unfiltered sun do the work.
 | Audio | Web Audio API |
 
 No framework, no bundled assets, no backend. Scores live in `localStorage`.
+
+### Continuous integration
+
+Every push and pull request runs [three jobs](.github/workflows/ci.yml):
+
+| Job | What it checks |
+| --- | --- |
+| **Build** | Builds on Node 20 and 22, then verifies the output is a usable site — bundles emitted, and no root-absolute asset paths, which work locally and break under a subdirectory |
+| **Boot smoke test** | Loads the production build in headless Chromium and asserts the game reaches its menu with a live WebGL2 context and no console errors. A build cannot catch a shader that fails to compile — this can |
+| **Invariants** | Fails if a binary asset is ever committed, or if the cited real-world constants drift from the values documented here |
+
+Deployment is handled by Vercel, which builds from this repository directly.
+
+Run the smoke test locally:
+
+```bash
+npx playwright install chromium && npm run build && npm run smoke
+```
 
 ---
 
