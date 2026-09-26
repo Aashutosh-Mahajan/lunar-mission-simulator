@@ -22,6 +22,7 @@ mesh and sound in the project is generated procedurally at load time.
 - [Quick start](#quick-start)
 - [What the game is](#what-the-game-is)
 - [Difficulty](#difficulty)
+- [Autoplay](#autoplay)
 - [Controls](#controls)
 - [Landing sites](#landing-sites)
 - [Project structure](#project-structure)
@@ -133,6 +134,25 @@ Cadet one, whatever the scores.
 
 ---
 
+## Autoplay
+
+The game can fly itself, in every phase and at every difficulty:
+
+- **▶ Watch Autoplay** on the main menu flies the whole mission — launch, coast and
+  landing — moving on from each debrief by itself.
+- **▶ Autoplay** on any site card on the mission board flies that landing.
+- **`O`** (or the pause menu) hands control to the computer mid-flight, and takes it back.
+
+Autoplay is a virtual pilot, not a separate model: it produces the same controls a player
+does and feeds them through the same assists and physics. It steers the descent toward the
+pad with an analog stick, holds height until it is over the pad, and comes down briskly
+while high up — a leisurely descent spends too much propellant on gravity for the polar
+site's tank. It lands all six sites at all three difficulties, including Commander's real
+limits. Flights the computer flew any part of are marked *Autoplay — not recorded*: they
+set no records and unlock nothing.
+
+---
+
 ## Controls
 
 ### Lunar descent — Cadet
@@ -185,6 +205,7 @@ Cadet one, whatever the scores.
 
 | Input | Action |
 | --- | --- |
+| `O` | Autoplay on / off |
 | `Esc` / `P` | Pause |
 | `H` | Controls |
 | `R` | Restart the current flight |
