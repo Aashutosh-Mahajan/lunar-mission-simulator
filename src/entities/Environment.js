@@ -434,7 +434,11 @@ export default class Environment {
   }
 
   setQuality(quality) {
-    const size = quality === "low" ? 1024 : quality === "high" ? 4096 : 2048;
+    // The frustum spans roughly ±190 m, so 2048 texels is ~0.19 m each —
+    // already finer than anything on screen resolves. 4096 quadrupled the
+    // shadow pass (about 6 ms a frame on integrated graphics) for no visible
+    // gain.
+    const size = quality === "low" ? 1024 : quality === "high" ? 2048 : 1536;
     if (this.sunLight.shadow.mapSize.x !== size) {
       this.sunLight.shadow.mapSize.set(size, size);
       if (this.sunLight.shadow.map) {

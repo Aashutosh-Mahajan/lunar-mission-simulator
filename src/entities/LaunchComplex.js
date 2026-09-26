@@ -1,4 +1,5 @@
 import * as THREE from "three";
+import { mergeMeshes } from "../core/mergeStatic.js";
 import { makeRng } from "../materials/noise.js";
 
 // ---------------------------------------------------------------------------
@@ -183,6 +184,9 @@ export default class LaunchComplex {
 
     const legOffset = 5.2;
     const legRadius = 0.55;
+    // The static lattice is collected here and baked into one mesh at the
+    // end — see core/mergeStatic.js. Only the swing arms and strobes animate.
+    const lattice = [];
 
     // Four corner columns.
     for (const [sx, sz] of [[-1, -1], [-1, 1], [1, -1], [1, 1]]) {
@@ -191,7 +195,7 @@ export default class LaunchComplex {
         this.paintedSteel
       );
       leg.position.set(sx * legOffset, TOWER_HEIGHT / 2 + this.deckHeight, sz * legOffset);
-      tower.add(leg);
+      lattice.push(leg);
     }
 
     // Horizontal bracing every few metres, with diagonals — the open lattice
@@ -214,7 +218,7 @@ export default class LaunchComplex {
             y,
             axis === "x" ? s * legOffset : 0
           );
-          tower.add(beam);
+          lattice.push(beam);
         }
       }
       // Diagonals on two faces.
@@ -228,7 +232,7 @@ export default class LaunchComplex {
           );
           diag.position.set(0, y + h / 2, s * legOffset);
           diag.rotation.z = Math.atan2(legOffset * 2, h) * (i % 2 === 0 ? 1 : -1);
-          tower.add(diag);
+          lattice.push(diag);
         }
       }
     }
@@ -252,10 +256,14 @@ export default class LaunchComplex {
     // Hammerhead crane on top.
     const crane = new THREE.Mesh(new THREE.BoxGeometry(34, 1.8, 2.2), this.paintedSteel);
     crane.position.set(8, this.deckHeight + TOWER_HEIGHT + 3, 0);
-    tower.add(crane);
+    lattice.push(crane);
     const mast = new THREE.Mesh(new THREE.BoxGeometry(2.2, 7, 2.2), this.paintedSteel);
     mast.position.set(0, this.deckHeight + TOWER_HEIGHT + 3.5, 0);
-    tower.add(mast);
+    lattice.push(mast);
+
+    // ~115 primitives, one draw call (two with the shadow pass) instead of
+    // ~230.
+    tower.add(mergeMeshes(lattice, this.paintedSteel));
 
     // Warning strobes up the tower.
     this.strobes = [];
@@ -378,8 +386,14 @@ export default class LaunchComplex {
 
   dispose() {
     this.scene.remove(this.group);
+    // Materials were created here, so they are ours to free too — previously
+    // only geometry was, and every launch left its materials and their GPU
+    // programs behind.
+    const materials = new Set();
     this.group.traverse((o) => {
       if (o.geometry) o.geometry.dispose();
+      if (o.material) materials.add(o.material);
     });
+    for (const m of materials) m.dispose();
   }
 }

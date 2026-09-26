@@ -5,6 +5,7 @@ import { UnrealBloomPass } from "three/addons/postprocessing/UnrealBloomPass.js"
 import { ShaderPass } from "three/addons/postprocessing/ShaderPass.js";
 import { OutputPass } from "three/addons/postprocessing/OutputPass.js";
 import { SMAAPass } from "three/addons/postprocessing/SMAAPass.js";
+import { FXAAPass } from "three/addons/postprocessing/FXAAPass.js";
 
 // ---------------------------------------------------------------------------
 // Rendering: physically-based, HDR, tone-mapped.
@@ -96,6 +97,15 @@ const GradeShader = {
   `,
 };
 
+// Adaptive resolution thresholds (seconds per frame).
+const ADAPT = {
+  SLOW_FRAME: 1 / 48, // below ~48 fps, drop resolution
+  FAST_FRAME: 1 / 62, // above ~62 fps, allow it back up
+  STEP: 0.1,
+  MIN_SCALE: 0.55,
+  COOLDOWN: 1.5, // seconds between changes
+};
+
 export default class RenderPipeline {
   constructor(canvas, scene, camera, settings) {
     this.scene = scene;
@@ -117,6 +127,9 @@ export default class RenderPipeline {
     // surface muddier than the Apollo surface photography it should evoke.
     this.renderer.toneMappingExposure = 1.18;
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
+
+    // Adaptive resolution is on unless the player has explicitly turned it
+    // off; it is what keeps integrated GPUs smooth.
 
     this._buildComposer();
     this.applySettings(settings);
@@ -150,8 +163,13 @@ export default class RenderPipeline {
     this.outputPass = new OutputPass();
     this.composer.addPass(this.outputPass);
 
+    // Two antialiasing options. SMAA gives the cleanest edges but is three
+    // full-screen passes (about 7 ms a frame on integrated graphics); FXAA is
+    // one pass at a fraction of the cost. High uses SMAA, Medium FXAA.
     this.smaaPass = new SMAAPass(size.x, size.y);
     this.composer.addPass(this.smaaPass);
+    this.fxaaPass = new FXAAPass();
+    this.composer.addPass(this.fxaaPass);
   }
 
   applySettings(settings) {
@@ -160,15 +178,47 @@ export default class RenderPipeline {
 
     this.renderer.shadowMap.enabled = q !== "low";
     this.bloomPass.enabled = settings.bloom !== false;
-    this.smaaPass.enabled = q !== "low" && settings.antialias !== false;
+    const aa = q !== "low" && settings.antialias !== false;
+    this.smaaPass.enabled = aa && q === "high";
+    this.fxaaPass.enabled = aa && q !== "high";
     this.gradePass.enabled = settings.grade !== false;
 
+    this.adaptive = settings.adaptiveResolution !== false;
     this.bloomPass.strength = q === "high" ? 0.5 : 0.4;
     this.gradePass.uniforms.grain.value = settings.grade === false ? 0 : q === "high" ? 0.016 : 0.011;
 
-    const scale = q === "low" ? 0.75 : q === "high" ? Math.min(window.devicePixelRatio, 2) : 1;
-    this.renderScale = scale;
+    // Render scale multiplies the (capped) device pixel ratio in resize().
+    // High used to set this to the device pixel ratio itself, which squared
+    // it: on a DPR-2 laptop screen the scene rendered at 4x density — sixteen
+    // times the pixels — through bloom and SMAA.
+    this.maxRenderScale = q === "low" ? 0.75 : q === "high" ? 1 : 0.9;
+    this.renderScale = this.maxRenderScale;
+    this._frameAvg = 1 / 60;
+    this._scaleCooldown = 0;
     this.resize();
+  }
+
+  /**
+   * Adaptive resolution. Tracks a smoothed frame time and steps the render
+   * scale down when the GPU cannot hold ~50 fps, and back up when there is
+   * headroom. Changes are rate-limited because resizing reallocates every
+   * render target in the composer.
+   */
+  _adaptResolution(dt) {
+    if (!(dt > 0) || dt > 0.25) return; // tab switches, debugger pauses
+    this._frameAvg += (dt - this._frameAvg) * 0.05;
+    this._scaleCooldown -= dt;
+    if (this._scaleCooldown > 0) return;
+
+    let next = this.renderScale;
+    if (this._frameAvg > ADAPT.SLOW_FRAME) next = Math.max(ADAPT.MIN_SCALE, this.renderScale - ADAPT.STEP);
+    else if (this._frameAvg < ADAPT.FAST_FRAME) next = Math.min(this.maxRenderScale, this.renderScale + ADAPT.STEP);
+    if (Math.abs(next - this.renderScale) < 1e-3) return;
+
+    this.renderScale = next;
+    this._scaleCooldown = ADAPT.COOLDOWN;
+    this.resize();
+    this.onResolutionChange?.();
   }
 
   setExposure(value) {
@@ -194,7 +244,14 @@ export default class RenderPipeline {
     this.camera.updateProjectionMatrix();
   }
 
-  render(dt, elapsed) {
+  /**
+   * @param {number} dt simulation step (clamped by the shell)
+   * @param {number} elapsed
+   * @param {number} [frameTime] real, unclamped time since the last frame —
+   *   what adaptive resolution needs to see
+   */
+  render(dt, elapsed, frameTime = dt) {
+    if (this.adaptive) this._adaptResolution(frameTime);
     this.gradePass.uniforms.time.value = elapsed;
 
     if (this._flash) {
