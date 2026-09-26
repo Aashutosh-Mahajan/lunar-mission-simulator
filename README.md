@@ -21,6 +21,7 @@ mesh and sound in the project is generated procedurally at load time.
 - [Play online](https://lunar-mission-simulator.vercel.app/)
 - [Quick start](#quick-start)
 - [What the game is](#what-the-game-is)
+- [Difficulty](#difficulty)
 - [Controls](#controls)
 - [Landing sites](#landing-sites)
 - [Project structure](#project-structure)
@@ -106,9 +107,45 @@ ends the run.
 
 ---
 
+## Difficulty
+
+Chosen on the main menu. The simulation is identical at every setting — same gravity,
+thrust, mass flow and vehicles. What changes is how much of the flying the computer does,
+and how much margin the gear and tanks give you. That mirrors the real vehicles: the Apollo
+LM could be flown fully automatic, in attitude-hold, or in direct mode.
+
+| | Cadet | Pilot | Commander |
+| --- | --- | --- | --- |
+| **Descent** | Autopilot holds a safe sink rate; `W A S D` pick a direction *relative to the camera*; let go and it stops and sets itself down | You fly it; releasing the keys kills drift automatically; `G` holds descent rate | Direct control |
+| **Landing limits** | 1.7× vertical, 1.8× lateral, +10° tilt | 1.3× / 1.35× / +4° | Real LM design limits |
+| **Propellant** | 1.6× | 1.25× | As flown |
+| **Launch** | Stages, steers and cuts off by itself | Auto-staging; a flight director shows where to steer | Manual staging |
+| **Coast burns** | Engine cuts off on target | Wider window | Real window |
+
+The assists never touch the physics. They turn your inputs into the same things a pilot
+controls — a throttle setting and an attitude — using thrust-vector guidance, modelled on
+the LM's own autopilot modes (including P66, the descent-rate hold used for every actual
+Apollo landing).
+
+**Medals.** Each site has a bronze, silver and gold medal, for landing it on Cadet, Pilot
+and Commander. Records rank by difficulty first: a Commander landing always outranks a
+Cadet one, whatever the scores.
+
+---
+
 ## Controls
 
-### Lunar descent
+### Lunar descent — Cadet
+
+| Input | Action |
+| --- | --- |
+| `W` `A` `S` `D` | Fly away / left / back / right, relative to the camera |
+| `Shift` | Hover in place |
+| `Ctrl` | Come down faster |
+| `Space` | Climb |
+| Release all keys | Stop drifting and set down |
+
+### Lunar descent — Pilot and Commander
 
 | Input | Action |
 | --- | --- |
@@ -120,6 +157,7 @@ ends the run.
 | `Q` `E` | Yaw |
 | `↑` `↓` `←` `→` | RCS translation (fine lateral trim) |
 | `T` | Toggle attitude hold |
+| `G` | Descent-rate hold (throttles for you) |
 | `C` / `V` | Next / previous camera |
 | Mouse drag | Swing the view · wheel zooms |
 
@@ -128,7 +166,7 @@ ends the run.
 | Input | Action |
 | --- | --- |
 | `Shift` / `Ctrl` | Throttle up / down |
-| `W` `S` | Bias the pitch program (±24°) |
+| `W` `S` | Bias the pitch program (±24°) — steer the CMD needle onto the magenta FD bracket |
 | `Space` | Stage |
 | `I` | Engine cut-off and insertion attempt |
 | `,` / `.` | Time warp down / up (1×–8×) |
@@ -154,7 +192,9 @@ ends the run.
 
 A gamepad is supported for the descent phase.
 
-### How to actually land
+### How to actually land (Pilot and Commander)
+
+On Cadet, point `W A S D` at the pad and let go when you are over it. In the manual modes:
 
 Thrust leaves the bottom of the lander along its own axis, so tilting the vehicle splits
 that thrust into "hold me up" and "push me sideways". **This — not the RCS translation
@@ -199,9 +239,11 @@ src/
     CameraRig.js      Descent cameras      AscentCamera.js   Launch cameras
     CoastCamera.js    Cislunar cameras     MouseLook.js      Shared mouse control
     Input.js          Keyboard and gamepad AudioEngine.js    Procedural Web Audio
+    mergeStatic.js    Static geometry batching
   physics/
     landerPhysics.js  6-DOF descent integration
     rocketPhysics.js  Ascent, atmosphere, staging
+    landerAssist.js   Autopilot, drift-kill and descent-rate hold
   entities/
     Lander.js         Apollo LM at real scale
     Rocket.js         Saturn V             LaunchComplex.js  Pad and tower
@@ -209,6 +251,7 @@ src/
     Environment.js    Lunar sky            Spacecraft.js     CSM + LM stack
   levels/
     levelConfig.js    Data for the six descent sites
+    difficulty.js     Cadet / Pilot / Commander presets
     levelLoader.js    Descent runtime
     ascentConfig.js   ascentRuntime.js     coastRuntime.js
   scenes/
@@ -217,6 +260,7 @@ src/
   materials/
     textures.js       Procedural texture baking
     noise.js          Simplex, FBM, ridged noise
+    photometry.js     Lommel-Seeliger regolith shading
     assets.js
   fx/
     particles.js      Plume, dust, ice, pyrotechnics
@@ -224,7 +268,9 @@ src/
     hud.js  ascentHud.js  coastHud.js      Instrument panels
     debrief.js  ascentDebrief.js  coastDebrief.js
     levelSelect.js  leaderboard.js  campaign.js
-    screens.js  settings.js  countdown.js  coach.js
+    screens.js  settings.js  countdown.js  coach.js  difficultyPicker.js
+  dev/
+    harness.js        Headless test pilots (dev server only, never shipped)
 ```
 
 Each phase is deliberately isolated: deleting the Phase 2 and Phase 3 files leaves the
@@ -300,7 +346,15 @@ law. Two properties matter and were found by flying it:
 ## Graphics pipeline
 
 - **HDR rendering** with ACES filmic tone mapping, bloom, chromatic aberration, vignette,
-  film grain and SMAA anti-aliasing.
+  film grain and SMAA (High) or FXAA (Medium) anti-aliasing.
+- **Lunar photometry.** Regolith is shaded with a Lommel–Seeliger/Lambert blend rather
+  than pure Lambert. Lommel–Seeliger is the standard first-order photometric law for the
+  Moon — the reason the full Moon is not darkened at its edge. At these sites' 5–15° sun
+  elevations, Lambert shading dropped the whole foreground to near-black; real surface
+  photography at those angles shows bright, readable ground with crisp shadows.
+- **Propellant-correct exhaust.** The S-IC's kerosene flame is the brilliant orange plume;
+  the upper stages burned liquid hydrogen, whose exhaust is almost invisible — a faint
+  blue-violet haze. The first stage also lays a smoke trail that thins out with the air.
 - **Everything is procedural.** The repository ships no binary assets. Regolith PBR maps,
   crinkled MLI foil, spacecraft panels, the Earth's surface and clouds, and the lunar
   surface shader are all baked from noise at load time.
@@ -314,6 +368,19 @@ law. Two properties matter and were found by flying it:
   lights the ground beneath it.
 - **Procedural audio** through Web Audio — structure-borne engine rumble, RCS bangs,
   contact chimes, caution tones. No audio files.
+
+### Performance
+
+- **Adaptive resolution** steps the render scale down when the frame rate drops below
+  ~48 fps and back up when there is headroom, so integrated GPUs stay smooth.
+- **Quality is picked from the GPU**, not the CPU core count, on first launch.
+- **Static geometry is batched.** The launch tower's ~115 beams are baked into one mesh,
+  which took the pad view from 371 draw calls to 170.
+- **Particle sprites are sized from the projection**, so they stay correct at any field of
+  view and resolution — including under the launch tracker's telephoto zoom.
+
+Measured on Intel UHD integrated graphics at 1440×810, Medium quality: 7.5–13.7 ms per
+frame across all three phases.
 
 ### The scale problem
 
