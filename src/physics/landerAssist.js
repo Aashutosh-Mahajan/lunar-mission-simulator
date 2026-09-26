@@ -53,6 +53,8 @@ export default class LanderAssist {
     this.mode = mode;
     // Descent-rate hold, toggled with G. Always on in 'full'.
     this.rateHold = mode === "full";
+    // Set by autoplay: fly as full assist regardless of `mode`.
+    this.autopilot = false;
     // Last targets, exposed for the HUD.
     this.targetSinkRate = 0;
     this.targetVelocity = new THREE.Vector3();
@@ -73,10 +75,13 @@ export default class LanderAssist {
    * @returns {object} controls for stepLanderPhysics
    */
   apply(raw, ctx) {
+    // Autoplay takes the full autopilot whatever the difficulty the flight
+    // started on, so control can be handed over and back mid-flight.
+    const mode = this.autopilot ? "full" : this.mode;
     const out = { ...raw, targetUp: null, throttleOverride: undefined };
     this.active = false;
     this.arresting = false;
-    if (this.mode === "none" && !this.rateHold) return out;
+    if (mode === "none" && !this.rateHold) return out;
 
     const { lander, telemetry, gravity } = ctx;
     const s = lander.state;
@@ -89,7 +94,7 @@ export default class LanderAssist {
     let wantHorizontal = false;
     _accel.set(0, 0, 0);
 
-    if (this.mode === "full") {
+    if (mode === "full") {
       // Camera-relative travel: W is "away from me", D is "to my right",
       // whatever way the vehicle happens to be facing. This is the single
       // biggest difference in how approachable the descent feels.
@@ -116,7 +121,7 @@ export default class LanderAssist {
         this.targetVelocity.z += ctx.padVelocity.z;
       }
       wantHorizontal = true;
-    } else if (this.mode === "drift" && !steering && s.stabiliser) {
+    } else if (mode === "drift" && !steering && s.stabiliser) {
       // Hands off the stick: lean to cancel drift rather than stand upright.
       this.targetVelocity.set(0, 0, 0);
       if (ctx.padVelocity && ctx.padDistance < ASSIST.DECK_MATCH_RANGE) {
@@ -132,10 +137,10 @@ export default class LanderAssist {
     }
 
     // --- Vertical: what sink rate do we want? -----------------------------
-    const holdVertical = this.mode === "full" || this.rateHold;
+    const holdVertical = mode === "full" || this.rateHold;
     // null means "no vertical target": the player's own throttle applies.
     let sink = holdVertical ? scheduledSinkRate(alt) : null;
-    if (holdVertical && this.mode === "full") {
+    if (holdVertical && mode === "full") {
       // Space climbs, Shift hovers, Ctrl comes down faster.
       if (raw.burn) sink = -ASSIST.CLIMB_RATE;
       else if (raw.throttleUp > 0) sink = 0;
@@ -177,7 +182,7 @@ export default class LanderAssist {
       const maxTilt =
         alt < ASSIST.FLARE_ALTITUDE ? ASSIST.FLARE_TILT :
         alt < ASSIST.LOW_ALTITUDE ? ASSIST.LOW_TILT :
-        this.mode === "full" ? ASSIST.MAX_TILT : ASSIST.DRIFT_KILL_TILT;
+        mode === "full" ? ASSIST.MAX_TILT : ASSIST.DRIFT_KILL_TILT;
       const maxLateral = ay * Math.tan(THREE.MathUtils.degToRad(maxTilt));
       const lateral = Math.hypot(_accel.x, _accel.z);
       if (lateral > maxLateral && lateral > 1e-6) {
@@ -189,7 +194,7 @@ export default class LanderAssist {
       out.targetUp = _targetUp;
       // Attitude is now the computer's; pitch/roll keys are consumed by the
       // travel command rather than also rotating the vehicle directly.
-      if (this.mode === "full") {
+      if (mode === "full") {
         out.pitch = 0;
         out.roll = 0;
       }

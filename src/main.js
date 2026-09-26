@@ -29,6 +29,7 @@ import {
 } from "./ui/leaderboard.js";
 import { loadSettings, saveSettings, bindSettingsUi, detectQuality } from "./ui/settings.js";
 import { bindDifficultyPicker } from "./ui/difficultyPicker.js";
+import Autoplay, { descentControls as autoplayDescentControls } from "./levels/autoplay.js";
 
 // Phase 2. Imported lazily inside startAscent so that deleting the ascent
 // files cannot break the descent trainer at module-load time.
@@ -51,6 +52,13 @@ import { MAX_DT } from "./constants.js";
 // ---------------------------------------------------------------------------
 
 const RESULT_DELAY = 1.5; // seconds of watching the outcome before the debrief
+// While watching the whole mission on autoplay, how long each debrief stays up
+// before the next phase starts by itself.
+const AUTOPLAY_CONTINUE_DELAY = 5;
+const AUTOPLAY_BLOCKED_ACTIONS = new Set([
+  "stage", "insert", "throttleFull", "throttleCut", "rateHold",
+  "toggleStabiliser", "warpUp", "warpDown", "skip",
+]);
 
 class Game {
   constructor() {
@@ -58,6 +66,12 @@ class Game {
     this.scene = new THREE.Scene();
     this.camera = new THREE.PerspectiveCamera(55, window.innerWidth / window.innerHeight, 0.4, 22000);
     this._viewDir = new THREE.Vector3();
+    // Autoplay: `autoplay.active` while the computer is flying; `chain` when
+    // watching the whole mission, so each phase hands on to the next.
+    this.autoplay = new Autoplay();
+    this.autoplayChain = false;
+    this._autoplayUsed = false;
+    this._chainTimer = 0;
 
     this.settings = loadSettings();
     if (!localStorage.getItem("lunar-sim.settings.v1")) {
@@ -178,6 +192,11 @@ class Game {
       this.campaign.start();
       this.startAscent();
     });
+    click("btn-autoplay", () => this.watchMission());
+    click("btn-pause-autoplay", () => {
+      this.toggleAutoplay();
+      if (this.autoplay.active) this.setPaused(false);
+    });
     click("btn-launch", () => {
       this.campaign.reset();
       this.startAscent();
@@ -219,7 +238,15 @@ class Game {
   }
 
   onAction(action) {
+    // While autoplay flies, the player's flight inputs are ignored — only the
+    // camera, pause, help, mute, restart and the hand-over key still work.
+    if (this.autoplay.active && AUTOPLAY_BLOCKED_ACTIONS.has(action)) return;
+
     switch (action) {
+      case "autoplay":
+        this.toggleAutoplay();
+        break;
+
       case "pause":
         if (this.state === "flight") this.setPaused(true);
         else if (this.state === "paused") this.setPaused(false);
@@ -353,14 +380,19 @@ class Game {
   }
 
   openBoard() {
+    this._stopAutoplay();
     this._disposeRuntimes();
-    renderLevelSelect((id) => this.startLevel(id));
+    renderLevelSelect(
+      (id) => this.startLevel(id),
+      (id) => this.startLevel(id, { autoplay: true })
+    );
     this.screens.setHud(null);
     this.screens.show("sites");
     this.state = "board";
   }
 
   quitToMenu() {
+    this._stopAutoplay();
     this._disposeRuntimes();
     this.campaign.reset();
     this.screens.setHud(null);
@@ -400,7 +432,8 @@ class Game {
   // Level lifecycle
   // -------------------------------------------------------------------------
 
-  startLevel(levelId) {
+  startLevel(levelId, { autoplay = false } = {}) {
+    if (autoplay) this.autoplay.active = true;
     this.audio.init();
     this._disposeRuntimes();
 
@@ -453,6 +486,7 @@ class Game {
     this.screens.showFlight();
 
     this._showOpeningHints(config);
+    this._beginFlightAutoplay(this.runtime, this.hud);
   }
 
   /**
@@ -480,7 +514,8 @@ class Game {
   // Phase 2 — launch
   // -------------------------------------------------------------------------
 
-  startAscent() {
+  startAscent({ autoplay = false } = {}) {
+    if (autoplay) this.autoplay.active = true;
     this.audio.init();
     this._disposeRuntimes();
 
@@ -549,6 +584,7 @@ class Game {
     this.input.setEnabled(true);
     this.screens.setHud("ascent");
     this.screens.showFlight();
+    this._beginFlightAutoplay(this.ascent, this.ascentHud);
   }
 
   _finishAscent() {
@@ -556,7 +592,9 @@ class Game {
     // The banner is normally hidden by the flight loop; the debrief must not
     // depend on that having run since the count ended.
     this.screens.setCountdownVisible(false);
-    const bestInfo = recordAscentResult(result.outcome, result.stats, this.settings.difficulty);
+    const bestInfo = this._autoplayUsed
+      ? { best: getAscentBest(), improved: false }
+      : recordAscentResult(result.outcome, result.stats, this.settings.difficulty);
 
     renderAscentDebrief(
       result,
@@ -575,13 +613,15 @@ class Game {
     this.audio.setAlarm(false);
     this.screens.show("ascentResult");
     this.screens.setHud("ascent");
+    this._markAutoplayDebrief("asc-result-tag");
   }
 
   // -------------------------------------------------------------------------
   // Phase 3 — trans-lunar coast
   // -------------------------------------------------------------------------
 
-  startCoast() {
+  startCoast({ autoplay = false } = {}) {
+    if (autoplay) this.autoplay.active = true;
     this.audio.init();
     this._disposeRuntimes();
 
@@ -597,10 +637,13 @@ class Game {
 
     this.coast.onEvent = (text) => this.coastHud.pushLogEntry(this.coast.elapsed, text);
     this.coast.onBurnWindow = (which) => {
+      const tli = which === "tli";
       this.coastHud.showHint(
-        which === "tli"
-          ? "Hold SPACE to burn. Cut off with I when ΔV is inside the green gates."
-          : "Retrograde burn to capture. Same again — hold SPACE, cut off inside the band.",
+        this.autoplay.active
+          ? (tli ? "Autoplay: trans-lunar injection burn" : "Autoplay: lunar orbit insertion burn")
+          : tli
+            ? "Hold SPACE to burn. Cut off with I when ΔV is inside the green gates."
+            : "Retrograde burn to capture. Same again — hold SPACE, cut off inside the band.",
         7
       );
       this.audio.beep(1180, 0.16, 0.09);
@@ -626,6 +669,7 @@ class Game {
     this.input.setEnabled(true);
     this.screens.setHud("coast");
     this.screens.showFlight();
+    this._beginFlightAutoplay(this.coast, this.coastHud);
   }
 
   _finishCoast() {
@@ -647,12 +691,14 @@ class Game {
     this.audio.setAlarm(false);
     this.screens.show("coastResult");
     this.screens.setHud("coast");
+    this._markAutoplayDebrief("coast-result-tag");
   }
 
   _updateCoast(dt, controls, mouse) {
     const simulating = this.state === "flight";
     if (simulating) {
-      this.coast.update(dt, { burn: controls.burn });
+      const burn = this.autoplay.active ? this.autoplay.coastControls(this.coast).burn : controls.burn;
+      this.coast.update(dt, { burn });
     }
 
     this.coastCamera.drag(mouse.dx, mouse.dy);
@@ -734,6 +780,7 @@ class Game {
       this.input.setEnabled(true);
       this.screens.showFlight();
     }
+    this._syncAutoplayBadge();
   }
 
   /**
@@ -745,6 +792,8 @@ class Game {
     const restartBtn = document.getElementById("btn-pause-restart");
     const boardBtn = document.getElementById("btn-pause-quit");
     if (restartBtn) restartBtn.textContent = restart[this.mode] ?? "Restart";
+    const autoBtn = document.getElementById("btn-pause-autoplay");
+    if (autoBtn) autoBtn.textContent = this.autoplay.active ? "Take Control" : "Autoplay";
     if (boardBtn) boardBtn.classList.toggle("hidden", this.mode !== "descent");
   }
 
@@ -769,7 +818,11 @@ class Game {
   _finishMission() {
     const runtime = this.runtime;
     const result = runtime.result;
-    const bestInfo = recordResult(this.currentLevelId, result.outcome, result.stats, this.settings.difficulty);
+    // A flight the computer flew any part of is not the player's record, and
+    // does not unlock the next site.
+    const bestInfo = this._autoplayUsed
+      ? { best: getBest(this.currentLevelId), improved: false }
+      : recordResult(this.currentLevelId, result.outcome, result.stats, this.settings.difficulty);
 
     renderDebrief(
       result,
@@ -794,6 +847,100 @@ class Game {
     this.audio.setAlarm(false);
     this.screens.show("result");
     this.screens.setHud("descent");
+    // The landing is the last leg: watching the mission ends here.
+    this.autoplayChain = false;
+    this._markAutoplayDebrief("result-tag");
+  }
+
+  // -------------------------------------------------------------------------
+  // Autoplay
+  // -------------------------------------------------------------------------
+
+  /** Called by each start* method once its runtime exists. */
+  _beginFlightAutoplay(runtime, hud) {
+    this._autoplayUsed = false;
+    this._chainTimer = 0;
+    if (this.autoplay.active) {
+      this.autoplay.engage(this.mode, runtime);
+      this._autoplayUsed = true;
+      hud.showHint("Autoplay is flying — press O to take control", 4);
+    }
+    this._syncAutoplayBadge();
+  }
+
+  /** O / pause menu: hand control to the computer, or take it back. */
+  toggleAutoplay() {
+    if (this.state !== "flight" && this.state !== "paused") return;
+    const runtime = this.mode === "ascent" ? this.ascent : this.mode === "coast" ? this.coast : this.runtime;
+    if (!runtime) return;
+    const hud = this.mode === "ascent" ? this.ascentHud : this.mode === "coast" ? this.coastHud : this.hud;
+    if (this.autoplay.active) {
+      this.autoplay.release(this.mode, runtime);
+      this.autoplayChain = false;
+      if (this.mode === "ascent") this.ascentHud.setTimeScale(1);
+      hud.showHint("You have control", 2.5);
+    } else {
+      this.autoplay.engage(this.mode, runtime);
+      this._autoplayUsed = true;
+      hud.showHint("Autoplay is flying — press O to take control", 3);
+    }
+    this.audio.beep(this.autoplay.active ? 1180 : 640, 0.08, 0.07);
+    this._syncAutoplayBadge();
+    this._syncPauseMenu();
+  }
+
+  /** Watch the whole mission, pad to surface, flown by the computer. */
+  watchMission() {
+    this.campaign.start();
+    this.autoplayChain = true;
+    this.startAscent({ autoplay: true });
+  }
+
+  _stopAutoplay() {
+    this.autoplay.active = false;
+    this.autoplayChain = false;
+    this._syncAutoplayBadge();
+  }
+
+  _syncAutoplayBadge() {
+    const badge = document.getElementById("autoplay-badge");
+    const flying = this.state === "flight" || this.state === "paused";
+    if (badge) badge.classList.toggle("hidden", !(this.autoplay.active && flying));
+  }
+
+  _markAutoplayDebrief(tagId) {
+    // Autoplay started on one flight covers that flight only, so the
+    // debrief's "Fly it again" is the player's. Watching the whole mission
+    // carries it on to the next phase.
+    if (!this.autoplayChain) this.autoplay.active = false;
+    this._syncAutoplayBadge();
+    if (!this._autoplayUsed) return;
+    const tag = document.getElementById(tagId);
+    if (tag) tag.textContent = `${tag.textContent} · Autoplay — not recorded`;
+  }
+
+  /**
+   * While watching the mission, move on from a successful debrief by itself.
+   * Uses the debrief's own button, so the hand-off is exactly what a click
+   * would do.
+   */
+  _advanceAutoplayChain(dt) {
+    if (!this.autoplayChain || this.state !== "result") return;
+    const next =
+      this.mode === "ascent" && this.ascent?.result?.outcome === "orbit" ? "btn-asc-descent" :
+      this.mode === "coast" && this.coast?.result?.outcome === "arrived" ? "btn-coast-descend" :
+      null;
+    if (!next) {
+      // A leg failed: the watched mission is over, and a retry is the player's.
+      this.autoplayChain = false;
+      this.autoplay.active = false;
+      return;
+    }
+    this._chainTimer += dt;
+    if (this._chainTimer >= AUTOPLAY_CONTINUE_DELAY) {
+      this._chainTimer = 0;
+      document.getElementById(next)?.click();
+    }
   }
 
   // -------------------------------------------------------------------------
@@ -819,13 +966,17 @@ class Game {
       const simulating = this.state === "flight" || this.state === "result";
 
       if (simulating) {
-        const flown = this.state === "flight" ? controls : this._neutralControls();
         // The camera's heading, flattened onto the ground plane. Full assist
         // steers relative to it, so W always means "away from me".
         this.camera.getWorldDirection(this._viewDir);
         const len = Math.hypot(this._viewDir.x, this._viewDir.z) || 1;
-        flown.view = { x: this._viewDir.x / len, z: this._viewDir.z / len };
-        this._lastView = flown.view;
+        const view = { x: this._viewDir.x / len, z: this._viewDir.z / len };
+        this._lastView = view;
+        let flown;
+        if (this.state !== "flight") flown = this._neutralControls();
+        else if (this.autoplay.active) flown = autoplayDescentControls(this.runtime, this._neutralControls(), view);
+        else flown = controls;
+        flown.view = view;
         this.runtime.update(dt, flown);
       }
 
@@ -839,7 +990,11 @@ class Game {
 
       this.particles.update(dt);
       this.hud.update(this.runtime, this.camera, dt);
-      if (this.state === "flight") this.coach.update(this.runtime, dt, this._lastView);
+      // No coaching while the computer is flying — it would tell the player
+      // to press keys that are being ignored.
+      if (this.state === "flight" && !this.autoplay.active) {
+        this.coach.update(this.runtime, dt, this._lastView);
+      }
 
       this._updateAudio(dt, controls);
 
@@ -860,6 +1015,7 @@ class Game {
       this.particles?.update(dt);
     }
 
+    this._advanceAutoplayChain(dt);
     this.audio.update(dt);
     this.pipeline.render(dt, this.elapsed, raw);
   }
@@ -918,7 +1074,9 @@ class Game {
     if (simulating) {
       this.ascent.update(
         dt,
-        live ? this._ascentControls(controls) : this._ascentControls(this._neutralControls())
+        !live ? this._ascentControls(this._neutralControls()) :
+          this.autoplay.active ? this.autoplay.ascentControls(this.ascent) :
+          this._ascentControls(controls)
       );
     }
 

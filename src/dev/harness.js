@@ -150,5 +150,31 @@ export function installHarness(game) {
     return { alt: Math.round(rt.telemetry.gearAltitude) };
   };
 
-  window.__harness = { descent, descentAll, ascent, format, advanceAscent, viewAscent, viewDescent, hold };
+  /**
+   * Drives the game's real frame loop — input, autoplay, every phase, the
+   * debrief hand-offs — at a fixed 60 Hz, with rendering skipped for speed.
+   * Returns seconds of game time run. Stops early when `until()` is true.
+   */
+  const runLoop = (seconds, until) => {
+    const raf = window.requestAnimationFrame;
+    const render = game.pipeline.render;
+    window.requestAnimationFrame = () => 0;
+    game.pipeline.render = () => {};
+    let now = game.lastTime || performance.now();
+    let frames = 0;
+    try {
+      for (let i = 0; i < seconds * 60; i++) {
+        now += 1000 / 60;
+        game.loop(now);
+        frames++;
+        if (until?.()) break;
+      }
+    } finally {
+      window.requestAnimationFrame = raf;
+      game.pipeline.render = render;
+    }
+    return frames / 60;
+  };
+
+  window.__harness = { descent, descentAll, ascent, format, advanceAscent, viewAscent, viewDescent, hold, runLoop };
 }

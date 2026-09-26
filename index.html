@@ -43,6 +43,7 @@
           <div class="menu-actions">
             <button id="btn-campaign" class="btn-primary">Fly the Full Mission</button>
             <button id="btn-launch" class="btn-ghost">Launch Only</button>
+            <button id="btn-autoplay" class="btn-ghost">▶ Watch Autoplay</button>
             <button id="btn-fly" class="btn-ghost">Lunar Descent</button>
             <button id="btn-controls" class="btn-ghost">Controls</button>
             <button id="btn-settings" class="btn-ghost">Graphics</button>
@@ -54,6 +55,11 @@
           <div class="menu-foot" id="menu-foot"></div>
         </div>
       </section>
+
+      <!-- Shown over every phase's HUD while the computer is flying. -->
+      <div id="autoplay-badge" class="autoplay-badge hidden" role="status">
+        <span class="autoplay-dot"></span>AUTOPLAY<span class="autoplay-key">O to take control</span>
+      </div>
 
       <!-- ================= LEVEL SELECT ================= -->
       <section id="screen-sites" class="screen overlay hidden">
@@ -257,6 +263,7 @@
                  pause menu must never offer to restart or abort into a phase
                  other than the one being flown. -->
             <button id="btn-pause-restart" class="btn-ghost">Restart</button>
+            <button id="btn-pause-autoplay" class="btn-ghost">Autoplay</button>
             <button id="btn-pause-controls" class="btn-ghost">Controls</button>
             <button id="btn-pause-quit" class="btn-ghost">Abort to Mission Board</button>
             <button id="btn-pause-menu" class="btn-ghost">Main Menu</button>
@@ -321,6 +328,7 @@
                 cockpit — pan their look instead. Switching camera resets the swing.
               </p>
               <h3>Mission</h3>
+              <div class="key-row"><kbd>O</kbd><span>Autoplay — hand control to the computer, or take it back</span></div>
               <div class="key-row"><kbd>R</kbd><span>Restart the current flight</span></div>
               <div class="key-row"><kbd>P</kbd><kbd>Esc</kbd><span>Pause</span></div>
               <div class="key-row"><kbd>M</kbd><span>Mute audio</span></div>

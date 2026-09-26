@@ -190,6 +190,71 @@ body {
   flex-direction: column;
 }
 
+/* ---- Autoplay ------------------------------------------------------------- */
+.autoplay-badge {
+  position: absolute;
+  top: 58px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.18em;
+  color: var(--magenta);
+  background: var(--panel);
+  border: 1px solid rgba(227, 139, 255, 0.45);
+  border-radius: 3px;
+  pointer-events: none;
+}
+
+.autoplay-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--magenta);
+  box-shadow: 0 0 8px var(--magenta);
+  animation: autoplay-pulse 1.6s ease-in-out infinite;
+}
+
+.autoplay-key {
+  margin-left: 4px;
+  letter-spacing: 0.06em;
+  color: var(--ink-dim);
+}
+
+@keyframes autoplay-pulse {
+  50% { opacity: 0.3; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .autoplay-dot { animation: none; }
+}
+
+.site-autoplay {
+  margin-top: 12px;
+  appearance: none;
+  background: transparent;
+  border: 1px solid rgba(227, 139, 255, 0.4);
+  color: var(--magenta);
+  font-family: var(--font-mono);
+  font-size: 0.66rem;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  padding: 6px 12px;
+  border-radius: 3px;
+  cursor: pointer;
+}
+
+.site-autoplay:hover,
+.site-autoplay:focus-visible {
+  background: rgba(227, 139, 255, 0.1);
+  outline: none;
+}
+
 /* ---- Difficulty picker --------------------------------------------------- */
 .difficulty {
   margin: 22px 0 6px;

@@ -171,7 +171,9 @@ export default class CoastRuntime {
     // missed simply because the clock was running fast.
     const current = isTli ? this.deltaV : this.loiDeltaV;
     const lower = (isTli ? this.mission.deltaVBand : this.mission.loiBand)[0];
-    if (this.timeScale > 1 && current > lower - 220) {
+    // Not needed when the computer cuts the engine off itself (Cadet and
+    // autoplay): it stops on the target whatever the clock is doing.
+    if (this.timeScale > 1 && current > lower - 220 && !this.mission.autoCutoff) {
       this.timeScale = 1;
       this.onWarpCancelled?.();
     }

@@ -101,9 +101,10 @@ function profileSvg(level) {
 
 /**
  * Renders the mission board.
- * @param {(levelId:number)=>void} onChoose
+ * @param {(levelId:number)=>void} onChoose fly the site
+ * @param {(levelId:number)=>void} [onAutoplay] watch the computer fly it
  */
-export function renderLevelSelect(onChoose) {
+export function renderLevelSelect(onChoose, onAutoplay) {
   const grid = document.getElementById("site-grid");
   const progress = document.getElementById("sites-progress");
   grid.innerHTML = "";
@@ -140,6 +141,19 @@ export function renderLevelSelect(onChoose) {
 
     if (unlocked) {
       card.addEventListener("click", () => onChoose(level.id));
+      if (onAutoplay) {
+        const auto = document.createElement("button");
+        auto.type = "button";
+        auto.className = "site-autoplay";
+        auto.textContent = "▶ Autoplay";
+        auto.title = "Watch the computer land this site";
+        // Its own action, not a click through to flying the site.
+        auto.addEventListener("click", (e) => {
+          e.stopPropagation();
+          onAutoplay(level.id);
+        });
+        card.querySelector(".site-body").appendChild(auto);
+      }
     }
     grid.appendChild(card);
   }

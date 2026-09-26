@@ -34,6 +34,7 @@ const ACTION_KEYS = {
   KeyV: "cameraPrev",
   KeyT: "toggleStabiliser",
   KeyG: "rateHold",
+  KeyO: "autoplay",
   KeyZ: "throttleFull",
   KeyX: "throttleCut",
   KeyR: "restart",
