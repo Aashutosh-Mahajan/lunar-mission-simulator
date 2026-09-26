@@ -1,4 +1,5 @@
 import * as THREE from "three";
+import { buildServiceModuleLivery } from "../materials/textures.js";
 import Lander from "./Lander.js";
 
 // ---------------------------------------------------------------------------
@@ -12,7 +13,9 @@ import Lander from "./Lander.js";
 // ---------------------------------------------------------------------------
 
 const SM_RADIUS = 1.95;
-const SM_LENGTH = 7.5;
+// The service module's drum. The oft-quoted 7.5 m includes the SPS engine
+// bell; the cylinder itself is about 4.6 m.
+const SM_LENGTH = 4.6;
 const CM_HEIGHT = 3.5;
 
 export default class Spacecraft {
@@ -39,16 +42,14 @@ export default class Spacecraft {
   _buildCsm() {
     const a = this.assets;
 
-    // Service Module: a bare aluminium drum. The real one was largely
-    // unpainted, so it reads as bright bare metal against black.
+    // Service Module: bare aluminium with the white-painted radiator panels
+    // that rejected the fuel cells' heat (see textures.js).
     const smMat = new THREE.MeshStandardMaterial({
-      color: 0xb6bcc2,
-      metalness: 0.82,
-      roughness: 0.32,
-      map: a.panel.map,
-      normalMap: a.panel.normalMap,
-      roughnessMap: a.panel.roughnessMap,
+      map: buildServiceModuleLivery(SM_LENGTH, SM_RADIUS),
+      metalness: 0.5,
+      roughness: 0.4,
     });
+    this._smMaterial = smMat;
 
     const sm = new THREE.Mesh(
       new THREE.CylinderGeometry(SM_RADIUS, SM_RADIUS, SM_LENGTH, 32, 1),
@@ -170,6 +171,8 @@ export default class Spacecraft {
     this.lander.group.rotation.z = Math.PI;
     this.lander.group.position.y = this.dockY + 2.9;
     this.lander.group.scale.setScalar(0.98);
+    // Gear stays folded for the whole coast.
+    this.lander.setGearStowed(true);
   }
 
   _buildEngine() {
@@ -297,5 +300,7 @@ export default class Spacecraft {
       if (o.geometry) o.geometry.dispose();
     });
     this.plumeMaterial.dispose();
+    this._smMaterial?.map?.dispose();
+    this._smMaterial?.dispose();
   }
 }
