@@ -440,5 +440,12 @@ export default class EarthScene {
     this.starMaterial.dispose();
     this.globeMaterial.dispose();
     this.limbMaterial.dispose();
+    // Both of these were left on the GPU after every launch: the sun sprite's
+    // texture is baked per scene, and a light's shadow map is a render target
+    // that removing the light from the scene does not release.
+    this.sunSprite.material.map?.dispose();
+    this.sunSprite.material.dispose();
+    this.sunLight.shadow.map?.dispose();
+    this.sunLight.shadow.map = null;
   }
 }
