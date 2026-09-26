@@ -1,5 +1,6 @@
 import * as THREE from "three";
 import { ASCENT_MISSION } from "../levels/ascentConfig.js";
+import { buildSaturnV, buildSaturnMaterials } from "./saturnV.js";
 
 // ---------------------------------------------------------------------------
 // Saturn V, modelled at real scale: 110.6 m tall, 10.1 m core diameter.
@@ -13,8 +14,6 @@ import { ASCENT_MISSION } from "../levels/ascentConfig.js";
 // so the physics only has to track one point.
 // ---------------------------------------------------------------------------
 
-const CORE_RADIUS = 10.1 / 2;
-const SIVB_RADIUS = 6.6 / 2;
 
 // How far the gimballed bells can swing. The real F-1 actuators had about
 // 6 degrees of travel in each axis.
@@ -46,255 +45,23 @@ export default class Rocket {
   }
 
   _buildMaterials() {
-    const a = this.assets;
-
-    // Saturn V's insulation was painted white with black roll-pattern
-    // markings so range cameras could measure roll rate.
-    //
-    // Paint, not bare metal: a dielectric (metalness 0) with a smooth satin
-    // finish. It previously took the LM's grey, mottled panel texture as its
-    // colour map and a fair amount of metalness, which rendered the stack as
-    // dirty grey aluminium. The panel normal map is kept, faintly, for the
-    // stringers and weld lines that real footage shows under the paint.
-    this.white = new THREE.MeshStandardMaterial({
-      color: 0xf2f1ec,
-      metalness: 0,
-      roughness: 0.46,
-      normalMap: a.panel.normalMap,
-      normalScale: new THREE.Vector2(0.35, 0.35),
-    });
-    this.black = new THREE.MeshStandardMaterial({
-      color: 0x1d1f22,
-      metalness: 0,
-      roughness: 0.5,
-      normalMap: a.panel.normalMap,
-      normalScale: new THREE.Vector2(0.35, 0.35),
-    });
-    this.metal = new THREE.MeshStandardMaterial({
-      color: 0xa8adb2,
-      metalness: 0.72,
-      roughness: 0.42,
-    });
-    this.engineMat = new THREE.MeshStandardMaterial({
-      color: 0x3a342e,
-      metalness: 0.7,
-      roughness: 0.5,
-      side: THREE.DoubleSide,
-    });
-    this.sootMat = new THREE.MeshStandardMaterial({
-      color: 0x1c1a18,
-      metalness: 0.4,
-      roughness: 0.85,
-    });
+    this.materials = buildSaturnMaterials(this.assets);
   }
 
+  /**
+   * Builds the stack from saturnV.js — real dimensions, a livery texture per
+   * stage, F-1s under their fairings with fins, J-2s in the interstages, and
+   * the full payload stack up to the escape tower's canards.
+   */
   _buildStages() {
-    const [sic, sii, sivb] = this.mission.stages;
-
-    // Each stage is its own group so separation can simply reparent it.
-    this.stageGroups = [];
-
-    // ---- S-IC (first stage) --------------------------------------------
-    const g1 = new THREE.Group();
-    const h1 = sic.length;
-    const body1 = new THREE.Mesh(
-      new THREE.CylinderGeometry(CORE_RADIUS, CORE_RADIUS, h1, 40, 1),
-      this.white
-    );
-    body1.position.y = h1 / 2;
-    g1.add(body1);
-
-    // Black roll-pattern bands.
-    for (const [yFrac, hFrac] of [[0.06, 0.1], [0.52, 0.06], [0.92, 0.07]]) {
-      const band = new THREE.Mesh(
-        new THREE.CylinderGeometry(CORE_RADIUS + 0.03, CORE_RADIUS + 0.03, h1 * hFrac, 40, 1),
-        this.black
-      );
-      band.position.y = h1 * yFrac;
-      g1.add(band);
-    }
-
-    // Four fins and their conical fairings at the base.
-    for (let i = 0; i < 4; i++) {
-      const ang = (i / 4) * Math.PI * 2 + Math.PI / 4;
-      const fin = new THREE.Mesh(new THREE.BoxGeometry(0.5, 6.4, 5.4), this.black);
-      fin.position.set(Math.cos(ang) * (CORE_RADIUS + 2.0), 3.4, Math.sin(ang) * (CORE_RADIUS + 2.0));
-      fin.rotation.y = -ang;
-      g1.add(fin);
-
-      const fairing = new THREE.Mesh(new THREE.ConeGeometry(1.5, 7.5, 12), this.white);
-      fairing.position.set(Math.cos(ang) * (CORE_RADIUS - 0.4), 6.0, Math.sin(ang) * (CORE_RADIUS - 0.4));
-      g1.add(fairing);
-    }
-
-    // Five F-1 engines: four on a ring that gimballed, one fixed in the centre.
-    this.f1Bells = [];
-    const bellPositions = [[0, 0]];
-    for (let i = 0; i < 4; i++) {
-      const ang = (i / 4) * Math.PI * 2;
-      bellPositions.push([Math.cos(ang) * 3.7, Math.sin(ang) * 3.7]);
-    }
-    for (const [bx, bz] of bellPositions) {
-      const bell = this._makeBell(1.2, 1.9, 4.2, this.engineMat);
-      bell.position.set(bx, -2.2, bz);
-      g1.add(bell);
-      this.f1Bells.push(bell);
-    }
+    const built = buildSaturnV(this.mission, this.materials);
+    this.stageGroups = built.stages;
+    for (const s of this.stageGroups) this.group.add(s.group);
+    this.f1Bells = built.bells;
     // The four outboard F-1s gimballed to steer; the centre engine was fixed.
-    this.gimballedBells = this.f1Bells.slice(1);
-
-    // Engine skirt / heat shield.
-    const skirt = new THREE.Mesh(
-      new THREE.CylinderGeometry(CORE_RADIUS, CORE_RADIUS * 0.96, 1.2, 40, 1, true),
-      this.sootMat
-    );
-    skirt.position.y = -0.5;
-    skirt.material.side = THREE.DoubleSide;
-    g1.add(skirt);
-
-    this.group.add(g1);
-    this.stageGroups.push({ group: g1, height: h1, config: sic });
-
-    // ---- S-II (second stage) -------------------------------------------
-    const g2 = new THREE.Group();
-    g2.position.y = h1;
-    const h2 = sii.length;
-    const body2 = new THREE.Mesh(
-      new THREE.CylinderGeometry(CORE_RADIUS, CORE_RADIUS, h2, 40, 1),
-      this.white
-    );
-    body2.position.y = h2 / 2;
-    g2.add(body2);
-
-    // Interstage skirt, jettisoned in reality but kept as a visual band.
-    const inter = new THREE.Mesh(
-      new THREE.CylinderGeometry(CORE_RADIUS + 0.04, CORE_RADIUS + 0.04, 5.5, 40),
-      this.black
-    );
-    inter.position.y = 2.6;
-    g2.add(inter);
-
-    for (let i = 0; i < 5; i++) {
-      const ang = (i / 5) * Math.PI * 2;
-      const bell = this._makeBell(0.5, 1.0, 2.6, this.engineMat);
-      const r = i === 0 ? 0 : 2.2;
-      bell.position.set(Math.cos(ang) * r, -1.5, Math.sin(ang) * r);
-      g2.add(bell);
-    }
-
-    this.group.add(g2);
-    this.stageGroups.push({ group: g2, height: h2, config: sii });
-
-    // ---- S-IVB (third stage) + payload ---------------------------------
-    const g3 = new THREE.Group();
-    g3.position.y = h1 + h2;
-    const h3 = sivb.length;
-
-    // Tapered adapter from the 10.1 m core to the 6.6 m third stage.
-    const taper = new THREE.Mesh(
-      new THREE.CylinderGeometry(SIVB_RADIUS, CORE_RADIUS, 3.6, 40, 1),
-      this.white
-    );
-    taper.position.y = 1.8;
-    g3.add(taper);
-
-    const body3 = new THREE.Mesh(
-      new THREE.CylinderGeometry(SIVB_RADIUS, SIVB_RADIUS, h3 - 3.6, 32, 1),
-      this.white
-    );
-    body3.position.y = 3.6 + (h3 - 3.6) / 2;
-    g3.add(body3);
-
-    const band3 = new THREE.Mesh(
-      new THREE.CylinderGeometry(SIVB_RADIUS + 0.03, SIVB_RADIUS + 0.03, 1.6, 32),
-      this.black
-    );
-    band3.position.y = 5.2;
-    g3.add(band3);
-
-    const j2 = this._makeBell(0.45, 0.9, 2.4, this.engineMat);
-    j2.position.y = -1.2;
-    g3.add(j2);
-
-    // Instrument unit ring.
-    const iu = new THREE.Mesh(
-      new THREE.CylinderGeometry(SIVB_RADIUS + 0.02, SIVB_RADIUS + 0.02, 0.9, 32),
-      this.metal
-    );
-    iu.position.y = h3 + 0.45;
-    g3.add(iu);
-
-    // Spacecraft adapter housing the lunar module.
-    const slaHeight = 8.5;
-    const sla = new THREE.Mesh(
-      new THREE.CylinderGeometry(1.95, SIVB_RADIUS, slaHeight, 32, 1),
-      this.white
-    );
-    sla.position.y = h3 + 0.9 + slaHeight / 2;
-    g3.add(sla);
-
-    // Service module.
-    const smHeight = 7.5;
-    const sm = new THREE.Mesh(
-      new THREE.CylinderGeometry(1.95, 1.95, smHeight, 32),
-      this.metal
-    );
-    sm.position.y = h3 + 0.9 + slaHeight + smHeight / 2;
-    g3.add(sm);
-
-    // Service Propulsion System bell.
-    const sps = this._makeBell(0.4, 0.8, 2.2, this.engineMat);
-    sps.position.y = h3 + 0.9 + slaHeight - 1.0;
-    sps.rotation.x = Math.PI; // points aft, tucked under the SM
-    g3.add(sps);
-
-    // Command module cone.
-    const cmY = h3 + 0.9 + slaHeight + smHeight;
-    const cm = new THREE.Mesh(new THREE.ConeGeometry(1.95, 3.5, 32), this.metal);
-    cm.position.y = cmY + 1.75;
-    g3.add(cm);
-
-    // Launch escape system: tower and solid motor.
-    const towerY = cmY + 3.5;
-    const escTower = new THREE.Group();
-    for (let i = 0; i < 3; i++) {
-      const ang = (i / 3) * Math.PI * 2;
-      const leg = new THREE.Mesh(new THREE.CylinderGeometry(0.09, 0.09, 3.2, 6), this.metal);
-      leg.position.set(Math.cos(ang) * 0.55, towerY + 1.6, Math.sin(ang) * 0.55);
-      leg.rotation.z = Math.cos(ang) * 0.12;
-      leg.rotation.x = -Math.sin(ang) * 0.12;
-      escTower.add(leg);
-    }
-    const escMotor = new THREE.Mesh(new THREE.CylinderGeometry(0.4, 0.4, 4.6, 20), this.white);
-    escMotor.position.y = towerY + 5.5;
-    escTower.add(escMotor);
-    const escNose = new THREE.Mesh(new THREE.ConeGeometry(0.4, 2.4, 20), this.black);
-    escNose.position.y = towerY + 9.0;
-    escTower.add(escNose);
-    g3.add(escTower);
-    this.escapeTower = escTower;
-
-    this.group.add(g3);
-    this.stageGroups.push({ group: g3, height: h3, config: sivb });
-
-    // Overall stack height from the base of the S-IC to the tip of the escape
-    // tower — the real vehicle stood 110.6 m.
-    this.totalHeight = h1 + h2 + cmY + 3.5 + 10.2;
-  }
-
-  /** A lathed bell nozzle with a proper expanding contour. */
-  _makeBell(throatRadius, exitRadius, length, material) {
-    const points = [];
-    const steps = 12;
-    for (let i = 0; i <= steps; i++) {
-      const t = i / steps;
-      const r = throatRadius + Math.pow(t, 0.6) * (exitRadius - throatRadius);
-      points.push(new THREE.Vector2(r, -t * length));
-    }
-    const geo = new THREE.LatheGeometry(points, 20);
-    const mesh = new THREE.Mesh(geo, material);
-    mesh.material.side = THREE.DoubleSide;
-    return mesh;
+    this.gimballedBells = built.gimballed;
+    this.escapeTower = built.escape;
+    this.totalHeight = built.totalHeight;
   }
 
   /**
@@ -520,10 +287,12 @@ export default class Rocket {
       h.object.rotation.y += h.spin.y * dt;
       h.object.rotation.z += h.spin.z * dt;
     }
-    // Retire husks once they are far behind and no longer worth drawing.
+    // Retire husks once they are far behind and no longer worth drawing,
+    // freeing their geometry (it was previously left on the GPU).
     this.huskGroups = this.huskGroups.filter((h) => {
       if (h.age > 26) {
         this.scene.remove(h.object);
+        h.object.traverse((o) => o.geometry?.dispose());
         return false;
       }
       return true;
@@ -557,9 +326,10 @@ export default class Rocket {
     const length = stage.diameter * (3.4 + expansion * 4.5) * (0.5 + throttle * 0.7);
 
     // Position the plume at the base of the currently burning stage.
+    // Starts at the burning stage's nozzle exit plane.
     let offset = 0;
     for (let i = 0; i < stageIndex; i++) offset += this.stageGroups[i].height;
-    this.plume.position.set(0, offset - 3.2, 0);
+    this.plume.position.set(0, offset + (this.stageGroups[stageIndex]?.nozzleExit ?? -3.2), 0);
     this.plume.scale.set(radius, length, radius);
 
     this.engineLight.position.set(0, offset - 6, 0);
@@ -600,11 +370,23 @@ export default class Rocket {
 
   dispose() {
     this.scene.remove(this.group);
-    for (const h of this.huskGroups) this.scene.remove(h.object);
+    for (const h of this.huskGroups) {
+      this.scene.remove(h.object);
+      h.object.traverse((o) => o.geometry?.dispose());
+    }
     this.huskGroups.length = 0;
     this.group.traverse((o) => {
       if (o.geometry) o.geometry.dispose();
     });
     this.plumeMaterial.dispose();
+
+    // Materials and the textures baked for this vehicle. The panel and foil
+    // normal maps some of them borrow belong to the shared asset cache.
+    const m = this.materials;
+    const own = [m.livery.sic.map, m.livery.sii.map, m.livery.sivb.map, m.serviceModule.map, m.bell.normalMap];
+    for (const tex of own) tex?.dispose();
+    for (const mat of [...Object.values(m.livery), ...Object.values(m).filter((x) => x?.isMaterial)]) {
+      mat.dispose();
+    }
   }
 }
