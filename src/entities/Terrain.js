@@ -505,13 +505,21 @@ export default class Terrain {
     const indices = [];
 
     // Skyline height and crest position vary slowly round the ring.
+    //
+    // Lunar mountains are rounded, not jagged. With no wind, water or ice,
+    // the only erosion is billions of years of micrometeorite gardening,
+    // which softens every peak into a broad dome — Apollo 15's Hadley Delta
+    // and Mount Hadley look like smooth heaps, not alpine spires. So the
+    // skyline is smooth fbm with only a little ridged character, and few
+    // octaves: no fine sharp detail survives at this scale.
     const skyline = (a) => {
       const nx = Math.cos(a) * 3.2;
       const nz = Math.sin(a) * 3.2;
-      const main = ridged(this.noiseB, nx, nz, 5);
-      const broad = fbm(this.noise, nx * 0.45 + 11, nz * 0.45 - 7, 3);
+      const dome = fbm(this.noiseB, nx * 0.8, nz * 0.8, 3) * 0.5 + 0.5;
+      const ridge = ridged(this.noiseB, nx, nz, 2);
+      const broad = fbm(this.noise, nx * 0.45 + 11, nz * 0.45 - 7, 2);
       return {
-        height: 90 + main * main * 460 + broad * 70,
+        height: 80 + dome * dome * 380 + ridge * 60 + broad * 60,
         crest: 0.48 + fbm(this.noise, nx * 0.6 - 3, nz * 0.6 + 5, 2) * 0.16,
       };
     };
@@ -533,8 +541,9 @@ export default class Terrain {
         const profile = d < 0 ? Math.exp(-(d * d) / 0.045) : Math.exp(-(d * d) / 0.02);
         const apron = 0.28 * Math.exp(-((u - crest + 0.26) ** 2) / 0.02);
         // Ridged detail so the slopes carry gullies and spurs, not a smooth hump.
-        const detail = ridged(this.noise, x * 0.0026, z * 0.0026, 4) - 0.35;
-        const y = -70 + height * (profile + apron) * (0.85 + detail * 0.55);
+        // Gentle undulation only — sharp gullies would read as terrestrial.
+        const detail = fbm(this.noise, x * 0.0022, z * 0.0022, 3);
+        const y = -70 + height * (profile + apron) * (0.92 + detail * 0.16);
         positions[v * 3] = x;
         positions[v * 3 + 1] = y;
         positions[v * 3 + 2] = z;
@@ -625,83 +634,87 @@ export default class Terrain {
     group.position.set(this.padCenter.x, y, this.padCenter.z);
     this.padGroup = group;
 
-    // Prepared deck: swept-clear regolith with a slightly brighter, compacted
-    // surface. Sits a few centimetres proud of the flattened field.
+    // Prepared deck: swept, compacted regolith — the same material as the
+    // ground around it, just flatter and a shade brighter, as compacted
+    // regolith is (the astronauts' footpaths show this in every photograph).
+    //
+    // The site is marked the way a surveyed pad on the Moon plausibly would
+    // be: flat, low-contrast survey panels and small strobes. It used to be
+    // painted like a heliport — saturated yellow rings with a glow, and
+    // constantly lit orbs on posts — which read as science fiction.
     const deckGeo = new THREE.CircleGeometry(this.padRadius, 72);
     deckGeo.rotateX(-Math.PI / 2);
-    const deck = new THREE.Mesh(
-      deckGeo,
-      new THREE.MeshStandardMaterial({
-        color: 0x8d8880,
-        roughness: 0.95,
-        metalness: 0,
-        map: this.assets.regolith.map,
-        normalMap: this.assets.regolith.normalMap,
-        polygonOffset: true,
-        polygonOffsetFactor: -2,
-      })
-    );
+    const deckMaterial = new THREE.MeshStandardMaterial({
+      color: 0xa29d94,
+      roughness: 1,
+      metalness: 0,
+      map: this.assets.regolith.map,
+      normalMap: this.assets.regolith.normalMap,
+      polygonOffset: true,
+      polygonOffsetFactor: -2,
+    });
+    applyLunarPhotometry(deckMaterial);
+    const deck = new THREE.Mesh(deckGeo, deckMaterial);
     deck.position.y = 0.04;
     deck.receiveShadow = true;
     group.add(deck);
 
-    // Concentric target rings — high-contrast so they read from altitude.
-    for (let i = 0; i < 3; i++) {
-      const rOuter = this.padRadius * (0.34 + i * 0.3);
-      const ringGeo = new THREE.RingGeometry(rOuter * 0.92, rOuter, 64);
-      ringGeo.rotateX(-Math.PI / 2);
-      const ring = new THREE.Mesh(
-        ringGeo,
-        new THREE.MeshStandardMaterial({
-          color: i === 0 ? 0xf0d24a : 0xe8e4dc,
-          roughness: 0.7,
-          metalness: 0,
-          emissive: i === 0 ? 0x2a2208 : 0x1a1a18,
-          polygonOffset: true,
-          polygonOffsetFactor: -4,
-        })
-      );
-      ring.position.y = 0.07;
-      group.add(ring);
-    }
-
-    // Cross-hair bars through the centre.
-    const barMat = new THREE.MeshStandardMaterial({
-      color: 0xf0d24a,
-      roughness: 0.7,
-      emissive: 0x2a2208,
+    // Survey panels: pale beta-cloth, dusted with regolith (the map mottles
+    // them) and unlit — they read in sunlight by contrast alone, which on a
+    // grey surface is plenty from altitude. Two rings of segmented panels and
+    // a centre cross, rather than continuous painted lines.
+    const panelMat = new THREE.MeshStandardMaterial({
+      color: 0xe6e2d8,
+      roughness: 0.92,
+      metalness: 0,
+      map: this.assets.regolith.map,
       polygonOffset: true,
       polygonOffsetFactor: -4,
     });
-    for (let i = 0; i < 2; i++) {
-      const bar = new THREE.Mesh(new THREE.BoxGeometry(this.padRadius * 1.5, 0.05, 0.9), barMat);
-      bar.rotation.y = (i * Math.PI) / 2;
-      bar.position.y = 0.08;
-      group.add(bar);
+    applyLunarPhotometry(panelMat, 0.45);
+    for (const [ringFraction, count] of [[0.55, 16], [0.95, 28]]) {
+      const radius = this.padRadius * ringFraction;
+      const arc = (Math.PI * 2) / count;
+      const geo = new THREE.RingGeometry(radius - 0.6, radius + 0.6, 4, 1, 0, arc * 0.62);
+      geo.rotateX(-Math.PI / 2);
+      for (let k = 0; k < count; k++) {
+        const panel = new THREE.Mesh(geo, panelMat);
+        panel.rotation.y = k * arc;
+        panel.position.y = 0.07;
+        group.add(panel);
+      }
+    }
+    for (let i = 0; i < 4; i++) {
+      const strip = new THREE.Mesh(new THREE.BoxGeometry(this.padRadius * 0.3, 0.03, 0.7), panelMat);
+      const a = (i * Math.PI) / 2;
+      strip.position.set(Math.cos(a) * this.padRadius * 0.2, 0.07, Math.sin(a) * this.padRadius * 0.2);
+      strip.rotation.y = -a;
+      group.add(strip);
     }
 
-    // Beacon masts around the perimeter with pulsing lamps.
+    // Perimeter strobes on low tripod masts: dark until they flash, like an
+    // obstruction strobe, rather than glowing orbs.
     this.beacons = [];
-    const mastMat = new THREE.MeshStandardMaterial({ color: 0x9a9a98, roughness: 0.5, metalness: 0.7 });
-    const lampGeo = new THREE.SphereGeometry(0.42, 12, 10);
+    const mastMat = new THREE.MeshStandardMaterial({ color: 0x8e8f8c, roughness: 0.55, metalness: 0.6 });
+    const lampGeo = new THREE.SphereGeometry(0.16, 10, 8);
     const beaconCount = 6;
     for (let i = 0; i < beaconCount; i++) {
       const a = (i / beaconCount) * Math.PI * 2;
       const bx = Math.cos(a) * (this.padRadius + 2.5);
       const bz = Math.sin(a) * (this.padRadius + 2.5);
-      const mast = new THREE.Mesh(new THREE.CylinderGeometry(0.16, 0.22, 3.4, 8), mastMat);
-      mast.position.set(bx, 1.7, bz);
+      const mast = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.07, 1.6, 6), mastMat);
+      mast.position.set(bx, 0.8, bz);
       mast.castShadow = true;
       group.add(mast);
 
       const lampMat = new THREE.MeshStandardMaterial({
-        color: 0xfff0c0,
-        emissive: 0xffc94a,
-        emissiveIntensity: 4,
+        color: 0xd8dde0,
+        emissive: 0xfff4e0,
+        emissiveIntensity: 0,
         roughness: 0.3,
       });
       const lamp = new THREE.Mesh(lampGeo, lampMat);
-      lamp.position.set(bx, 3.6, bz);
+      lamp.position.set(bx, 1.66, bz);
       group.add(lamp);
       this.beacons.push({ material: lampMat, phase: (i / beaconCount) * Math.PI * 2 });
     }
@@ -815,10 +828,10 @@ export default class Terrain {
     group.add(deck);
 
     // Hazard chevrons around the deck edge.
+    // Safety yellow is plausible on a machine; a self-lit glow is not.
     const chevronMat = new THREE.MeshStandardMaterial({
-      color: 0xf2c22c,
-      emissive: 0x241a02,
-      roughness: 0.6,
+      color: 0xc9a43a,
+      roughness: 0.75,
       metalness: 0.2,
     });
     for (let i = 0; i < 16; i++) {
@@ -833,21 +846,21 @@ export default class Terrain {
     targetGeo.rotateX(-Math.PI / 2);
     const target = new THREE.Mesh(
       targetGeo,
-      new THREE.MeshStandardMaterial({ color: 0xf0d24a, emissive: 0x2a2208, roughness: 0.7 })
+      new THREE.MeshStandardMaterial({ color: 0xcfc9bb, roughness: 0.85 })
     );
     target.position.y = 0.58;
     group.add(target);
 
     // Deck-mounted approach lights, so the moving pad is as findable from
     // altitude as a fixed one.
-    const lampGeo = new THREE.SphereGeometry(0.36, 12, 10);
+    const lampGeo = new THREE.SphereGeometry(0.16, 10, 8);
     const deckBeacons = 5;
     for (let i = 0; i < deckBeacons; i++) {
       const a = (i / deckBeacons) * Math.PI * 2;
       const mat = new THREE.MeshStandardMaterial({
-        color: 0xfff0c0,
-        emissive: 0xffc94a,
-        emissiveIntensity: 4,
+        color: 0xd8dde0,
+        emissive: 0xfff4e0,
+        emissiveIntensity: 0,
         roughness: 0.3,
       });
       const lamp = new THREE.Mesh(lampGeo, mat);
@@ -947,10 +960,11 @@ export default class Terrain {
   update(dt) {
     this.elapsed += dt;
     this._updateMovingPad(dt);
-    // Beacons pulse in sequence so the pad is findable from a distance.
+    // Strobes flash in a chase around the perimeter so the pad is findable
+    // from a distance: a sharp flash every 1.6 s, dark in between.
     for (const b of this.beacons ?? []) {
-      const pulse = 0.5 + 0.5 * Math.sin(this.elapsed * 3.4 - b.phase);
-      b.material.emissiveIntensity = 1.2 + pulse * 6;
+      const cycle = (this.elapsed / 1.6 + b.phase / (Math.PI * 2)) % 1;
+      b.material.emissiveIntensity = cycle < 0.06 ? 14 * (1 - cycle / 0.06) : 0;
     }
   }
 

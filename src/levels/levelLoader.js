@@ -74,6 +74,16 @@ export default class LevelRuntime {
       this.elapsed += dt;
       const flown = this._applyAssist(controls);
       this.diagnostics = stepLanderPhysics(this.lander, this.config, flown, dt, this.elapsed);
+    } else {
+      // Engine stop at contact, as the crew commanded it. The physics is no
+      // longer stepped once the flight resolves, so without this the throttle
+      // froze at its last value and the bell glow and its light stayed lit
+      // on the surface indefinitely.
+      const s = this.lander.state;
+      s.throttle = 0;
+      s.commandedThrottle = 0;
+      s.engineOn = false;
+      s.rcsFiring.set(0, 0, 0);
     }
 
     this.telemetry = flightData(this.lander, this.terrain);

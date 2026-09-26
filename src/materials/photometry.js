@@ -34,7 +34,9 @@ function lunarChunk(strength) {
   return chunk.replace(
     LAMBERT_LINE,
     `// Lommel-Seeliger / Lambert blend (see materials/photometry.js).
-	float lsMu = saturate( dot( geometryNormal, geometryViewDir ) );
+	// Floored: where the normal map tips a pixel away from the camera the raw
+	// ratio blows up, which scattered bright sparkles across the ground.
+	float lsMu = max( saturate( dot( geometryNormal, geometryViewDir ) ), 0.3 );
 	// Normalised by 2 so it equals Lambert at normal incidence and emission.
 	float lsTerm = min( 2.0 * dotNL / ( dotNL + lsMu + 1e-3 ), 1.5 );
 	vec3 irradiance = mix( dotNL, lsTerm, ${strength.toFixed(3)} ) * directLight.color;`

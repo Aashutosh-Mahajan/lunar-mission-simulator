@@ -232,29 +232,26 @@ export function buildPanelMaps(seed = 909, size = 256) {
   // Panel seam grid positions.
   const seamsX = [0.18, 0.5, 0.77];
   const seamsY = [0.31, 0.66];
-  const pits = [];
-  for (let i = 0; i < 90; i++) pits.push({ x: rng() * size, y: rng() * size, r: 0.6 + rng() * 2.4 });
+  // Spacecraft skin is flat sheet with seams and faint handling marks. The
+  // random pits this used to carry read as hammered metal on every vehicle.
+  void rng;
 
   for (let y = 0; y < size; y++) {
     for (let x = 0; x < size; x++) {
       const u = x / size;
       const v = y / size;
 
-      let h = fbm(noise, u * 20, v * 20, 3) * 0.12;
+      let h = fbm(noise, u * 20, v * 20, 3) * 0.03;
       // Seams are narrow grooves.
       let seam = 0;
       for (const sx of seamsX) seam = Math.max(seam, Math.exp(-Math.pow((u - sx) * size / 1.4, 2)));
       for (const sy of seamsY) seam = Math.max(seam, Math.exp(-Math.pow((v - sy) * size / 1.4, 2)));
       h -= seam * 0.75;
 
-      for (const p of pits) {
-        const d = Math.hypot(x - p.x, y - p.y);
-        if (d < p.r) h -= (1 - d / p.r) * 0.5;
-      }
       height[y * size + x] = h;
 
       const scuff = fbm(noiseB, u * 8, v * 8, 4) * 0.5 + 0.5;
-      const shade = 0.70 + scuff * 0.16 - seam * 0.35;
+      const shade = 0.76 + scuff * 0.07 - seam * 0.3;
       const i = (y * size + x) * 4;
       aImg.data[i] = clamp(255 * shade * 0.98, 0, 255);
       aImg.data[i + 1] = clamp(255 * shade * 0.99, 0, 255);
@@ -423,5 +420,127 @@ export function buildSunSprite(size = 256) {
   ctx.fillRect(0, 0, size, size);
   const tex = new THREE.CanvasTexture(canvas);
   tex.colorSpace = THREE.SRGBColorSpace;
+  return tex;
+}
+
+/**
+ * Pad concrete: pale grey slab with expansion joints, aggregate speckle and
+ * weathering stains. LC-39's hardstand was bright, almost white concrete;
+ * the old material reused the lunar regolith maps, which put craters on it.
+ */
+export function buildConcreteMaps(seed = 3900, size = 256) {
+  const noise = makeSimplex2(seed);
+  const noiseB = makeSimplex2(seed + 17);
+  const rng = makeRng(seed + 3);
+  const height = new Float32Array(size * size);
+  const canvas = makeCanvas(size);
+  const img = canvas.getContext("2d").createImageData(size, size);
+
+  // Four slabs a side per tile; joints are narrow sawn grooves.
+  const slabs = 4;
+  for (let y = 0; y < size; y++) {
+    for (let x = 0; x < size; x++) {
+      const u = x / size;
+      const v = y / size;
+      const ju = Math.abs((u * slabs) % 1 - 0.5) * 2; // 1 at a joint
+      const jv = Math.abs((v * slabs) % 1 - 0.5) * 2;
+      const joint = Math.max(smoothstep(0.975, 1, ju), smoothstep(0.975, 1, jv));
+
+      const stain = fbm(noise, u * 3, v * 3, 4) * 0.5 + 0.5;
+      const grain = fbm(noiseB, u * 60, v * 60, 2) * 0.5 + 0.5;
+      const speck = rng() < 0.02 ? -0.08 : 0;
+      // Each slab weathered slightly differently.
+      const slab = fbm(noiseB, Math.floor(u * slabs) * 3.1, Math.floor(v * slabs) * 2.7, 1) * 0.04;
+
+      const shade = clamp(0.8 - stain * 0.12 + grain * 0.05 + slab + speck - joint * 0.35, 0, 1);
+      const i = (y * size + x) * 4;
+      img.data[i] = shade * 255;
+      img.data[i + 1] = shade * 252;
+      img.data[i + 2] = shade * 244;
+      img.data[i + 3] = 255;
+      height[y * size + x] = grain * 0.08 - joint * 0.6;
+    }
+  }
+  canvas.getContext("2d").putImageData(img, 0, 0);
+  return {
+    map: (() => { const t = finishTexture(canvas, { srgb: true, aniso: 16 }); return t; })(),
+    normalMap: finishTexture(heightToNormalMap(height, size, 2.2), { aniso: 16 }),
+  };
+}
+
+/**
+ * Ground map for the land around the pad, as seen from the pad and from the
+ * early climb: Florida scrub and marsh, sand, the Atlantic to the east with
+ * surf along the beach, and the crawlerway running west from the pad.
+ * One texture spans `extent` metres, centred on the pad.
+ */
+export function buildCapeGroundMap(seed = 1969, size = 1024, extent = 26000) {
+  const noise = makeSimplex2(seed);
+  const noiseB = makeSimplex2(seed + 91);
+  const canvas = makeCanvas(size);
+  const img = canvas.getContext("2d").createImageData(size, size);
+  const half = extent / 2;
+
+  for (let py = 0; py < size; py++) {
+    for (let px = 0; px < size; px++) {
+      // World metres, x east, z south (matching the scene).
+      const x = (px / size) * extent - half;
+      const z = (py / size) * extent - half;
+
+      // Coastline: roughly north-south about a kilometre east of the pad,
+      // wandering with the dunes.
+      const coast = 1100 + Math.sin(z * 0.00035) * 650 + fbm(noise, z * 0.0004, 3.3, 3) * 380;
+      const sea = x - coast;
+      let r, g, b;
+      if (sea > 0) {
+        // Atlantic: shallows green-blue, deepening offshore, with surf lines.
+        const depth = clamp(sea / 4500, 0, 1);
+        r = 0.05 + (1 - depth) * 0.06;
+        g = 0.16 + (1 - depth) * 0.1;
+        b = 0.24 + (1 - depth) * 0.05;
+        const surf = sea < 90 ? smoothstep(90, 0, sea) * (0.5 + 0.5 * Math.sin(sea * 0.25 + z * 0.01)) : 0;
+        r += surf * 0.5;
+        g += surf * 0.5;
+        b += surf * 0.45;
+      } else if (sea > -140) {
+        // Beach and dunes.
+        const dune = fbm(noiseB, x * 0.01, z * 0.004, 3) * 0.5 + 0.5;
+        r = 0.68 + dune * 0.08;
+        g = 0.63 + dune * 0.07;
+        b = 0.52 + dune * 0.05;
+      } else {
+        // Scrub, palmetto and marsh: patchy olive, dry tan and dark water.
+        const veg = fbm(noise, x * 0.0016, z * 0.0016, 5) * 0.5 + 0.5;
+        const fine = fbm(noiseB, x * 0.012, z * 0.012, 3) * 0.5 + 0.5;
+        const marsh = smoothstep(0.62, 0.7, fbm(noiseB, x * 0.0005 + 7, z * 0.0005, 4) * 0.5 + 0.5);
+        r = 0.16 + veg * 0.12 + fine * 0.05;
+        g = 0.2 + veg * 0.11 + fine * 0.05;
+        b = 0.1 + veg * 0.05;
+        // Dry sandy clearings.
+        const dry = smoothstep(0.66, 0.8, fine * 0.4 + veg * 0.6);
+        r += dry * 0.22; g += dry * 0.18; b += dry * 0.13;
+        // Marsh water: the lagoons behind the barrier island.
+        r = r * (1 - marsh) + 0.06 * marsh;
+        g = g * (1 - marsh) + 0.12 * marsh;
+        b = b * (1 - marsh) + 0.14 * marsh;
+      }
+
+      // Crawlerway: two parallel gravel lanes running west from the pad.
+      if (x < -300 && Math.abs(z) < 60) {
+        const lane = Math.abs(Math.abs(z) - 22) < 14;
+        if (lane) { r = 0.62; g = 0.6; b = 0.55; }
+      }
+
+      const i = (py * size + px) * 4;
+      img.data[i] = clamp(r, 0, 1) * 255;
+      img.data[i + 1] = clamp(g, 0, 1) * 255;
+      img.data[i + 2] = clamp(b, 0, 1) * 255;
+      img.data[i + 3] = 255;
+    }
+  }
+  canvas.getContext("2d").putImageData(img, 0, 0);
+  const tex = finishTexture(canvas, { srgb: true, aniso: 16 });
+  tex.wrapS = THREE.ClampToEdgeWrapping;
+  tex.wrapT = THREE.ClampToEdgeWrapping;
   return tex;
 }

@@ -78,6 +78,8 @@ export default class Hud {
       padLocator: el("pad-locator"),
       padLocatorArrow: document.querySelector("#pad-locator .pad-locator-arrow"),
       padLocatorRange: document.querySelector("#pad-locator .pad-locator-range"),
+      designator: el("pad-designator"),
+      designatorRange: document.querySelector("#pad-designator .designator-range"),
 
       hint: el("hud-hint"),
     };
@@ -270,6 +272,43 @@ export default class Hud {
 
     // --- Off-screen pad locator ------------------------------------------
     this._updatePadLocator(camera, terrain, range);
+    this._updateDesignator(camera, terrain, range, t.gearAltitude);
+  }
+
+  /**
+   * On-screen landing point designator. The LM commander had one etched on
+   * his window, calibrated so he could read off where the guidance was taking
+   * him. Here it brackets the pad whenever it is in view, so the site itself
+   * can stay a muted, realistic survey pad on the ground. It fades out low
+   * down, where the pad fills the view and a bracket would just be clutter.
+   */
+  _updateDesignator(camera, terrain, range, altitude) {
+    const node = this.dom.designator;
+    if (!node) return;
+    this._padScreen.copy(terrain.padCenter).project(camera);
+    const inView =
+      this._padScreen.z < 1 &&
+      Math.abs(this._padScreen.x) < 0.94 &&
+      Math.abs(this._padScreen.y) < 0.9;
+    const fade = THREE.MathUtils.smoothstep(altitude, 25, 60);
+    if (!inView || fade <= 0.01) {
+      node.classList.add("hidden");
+      return;
+    }
+    node.classList.remove("hidden");
+    node.style.opacity = fade.toFixed(2);
+
+    // Size the bracket to the pad's apparent diameter, within sensible limits.
+    const toPad = camera.position.distanceTo(terrain.padCenter);
+    const fovRad = THREE.MathUtils.degToRad(camera.fov);
+    const px = (terrain.padRadius * 2 / (2 * toPad * Math.tan(fovRad / 2))) * window.innerHeight;
+    const size = THREE.MathUtils.clamp(px * 1.25, 28, 150);
+
+    node.style.left = `${((this._padScreen.x * 0.5 + 0.5) * window.innerWidth).toFixed(1)}px`;
+    node.style.top = `${((-this._padScreen.y * 0.5 + 0.5) * window.innerHeight).toFixed(1)}px`;
+    node.style.width = `${size.toFixed(0)}px`;
+    node.style.height = `${size.toFixed(0)}px`;
+    this.dom.designatorRange.textContent = `${range.toFixed(0)} m`;
   }
 
   _updatePadLocator(camera, terrain, range) {
@@ -345,6 +384,7 @@ export default class Hud {
 
   reset() {
     this.dom.padLocator.classList.add("hidden");
+    this.dom.designator?.classList.add("hidden");
     this.dom.hint.classList.remove("show");
     this._hintTimer = 0;
     this.alarmActive = false;

@@ -58,12 +58,17 @@ export default class LaunchComplex {
       map: a.panel.map,
       normalMap: a.panel.normalMap,
     });
+    // Pale hardstand concrete. This used to borrow the lunar regolith maps,
+    // which put craters on the ground at Kennedy.
+    a.concrete.map.repeat.set(32, 32);
+    a.concrete.normalMap.repeat.set(32, 32);
     this.concrete = new THREE.MeshStandardMaterial({
-      color: 0x8e8b84,
-      metalness: 0.02,
-      roughness: 0.94,
-      map: a.regolith.map,
-      normalMap: a.regolith.normalMap,
+      color: 0xd9d6cf,
+      metalness: 0,
+      roughness: 0.9,
+      map: a.concrete.map,
+      normalMap: a.concrete.normalMap,
+      normalScale: new THREE.Vector2(0.6, 0.6),
     });
     this.darkSteel = new THREE.MeshStandardMaterial({
       color: 0x3c4045,
@@ -87,43 +92,60 @@ export default class LaunchComplex {
     apron.receiveShadow = true;
     this.group.add(apron);
 
-    // Surrounding terrain out to the horizon. Kept simple and large — at
-    // altitude it reads as coastline, and it fades out before the detail
-    // would be missed.
-    const groundGeo = new THREE.CircleGeometry(26000, 64);
+    // Surrounding land and sea out to the horizon, from a baked map of the
+    // Cape: scrub and marsh, the beach and the Atlantic to the east (the
+    // reason launches fly out over water), and the crawlerway to the west.
+    //
+    // This was a 64-segment circle carrying per-vertex colours — which, with
+    // one vertex at the centre and 64 on the rim, blended to a single flat
+    // green: the ocean and the scrub never appeared.
+    const GROUND_EXTENT = 26000;
+    const groundGeo = new THREE.PlaneGeometry(GROUND_EXTENT, GROUND_EXTENT, 1, 1);
     groundGeo.rotateX(-Math.PI / 2);
-    const pos = groundGeo.attributes.position;
-    const colors = new Float32Array(pos.count * 3);
-    const c = new THREE.Color();
-    for (let i = 0; i < pos.count; i++) {
-      const x = pos.getX(i);
-      const z = pos.getZ(i);
-      const r = Math.hypot(x, z);
-      // Land to the west of the pad, ocean to the east — the Cape's geometry,
-      // and the reason launches fly out over water.
-      const ocean = x > 900 + Math.sin(z * 0.0004) * 700;
-      if (ocean) {
-        const depth = THREE.MathUtils.clamp((x - 900) / 9000, 0, 1);
-        c.setRGB(0.045 + depth * 0.01, 0.11 + depth * 0.05, 0.19 + depth * 0.1);
-      } else {
-        const scrub = 0.5 + Math.sin(x * 0.0009) * 0.2 + Math.cos(z * 0.0011) * 0.2;
-        c.setRGB(0.14 + scrub * 0.1, 0.17 + scrub * 0.12, 0.1 + scrub * 0.05);
-      }
-      // Haze toward the horizon.
-      const haze = THREE.MathUtils.clamp(r / 26000, 0, 1);
-      c.lerp(new THREE.Color(0x9fb4c8), haze * 0.75);
-      colors[i * 3] = c.r;
-      colors[i * 3 + 1] = c.g;
-      colors[i * 3 + 2] = c.b;
-    }
-    groundGeo.setAttribute("color", new THREE.BufferAttribute(colors, 3));
-
-    this.groundMaterial = new THREE.MeshBasicMaterial({
-      vertexColors: true,
+    this.groundMaterial = new THREE.ShaderMaterial({
+      uniforms: {
+        map: { value: this.assets.capeGround },
+        hazeColor: { value: new THREE.Color(0x9fb4c8) },
+        hazeStart: { value: 1500 },
+        hazeEnd: { value: GROUND_EXTENT * 0.5 },
+        brightness: { value: 1.05 },
+        opacity: { value: 1 },
+      },
+      vertexShader: /* glsl */ `
+        varying vec2 vUv;
+        varying vec3 vWorld;
+        void main() {
+          vUv = uv;
+          // World position, not distance: the plane has only four vertices,
+          // so a per-vertex distance would be ~18 km everywhere. Position
+          // interpolates exactly across a flat triangle; distance does not.
+          vec4 world = modelMatrix * vec4(position, 1.0);
+          vWorld = world.xyz;
+          gl_Position = projectionMatrix * viewMatrix * world;
+        }
+      `,
+      fragmentShader: /* glsl */ `
+        uniform sampler2D map;
+        uniform vec3 hazeColor;
+        uniform float hazeStart;
+        uniform float hazeEnd;
+        uniform float brightness;
+        uniform float opacity;
+        varying vec2 vUv;
+        varying vec3 vWorld;
+        void main() {
+          float vRange = length(vWorld.xz - cameraPosition.xz);
+          vec3 col = texture2D(map, vUv).rgb * brightness;
+          // Aerial perspective: distant land fades into the sky's haze.
+          float haze = smoothstep(hazeStart, hazeEnd, vRange) * 0.8;
+          gl_FragColor = vec4(mix(col, hazeColor, haze), opacity);
+          #include <tonemapping_fragment>
+          #include <colorspace_fragment>
+        }
+      `,
       transparent: true,
-      opacity: 1,
-      depthWrite: true,
     });
+    this.groundMaterial.opacity = 1;
     this.ground = new THREE.Mesh(groundGeo, this.groundMaterial);
     this.ground.position.y = -0.4;
     this.group.add(this.ground);

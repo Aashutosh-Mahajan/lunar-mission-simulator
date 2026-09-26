@@ -1173,6 +1173,41 @@ input[type="checkbox"] {
   background: rgba(124, 231, 208, 0.12);
 }
 
+/* Landing point designator: four corner brackets around the pad. */
+.pad-designator {
+  position: absolute;
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+  transition: width 0.12s linear, height 0.12s linear;
+}
+
+.pad-designator .bracket {
+  position: absolute;
+  width: 11px;
+  height: 11px;
+  border-color: rgba(124, 231, 208, 0.9);
+  border-style: solid;
+  border-width: 0;
+  filter: drop-shadow(0 0 3px rgba(0, 0, 0, 0.8));
+}
+
+.pad-designator .tl { left: 0; top: 0; border-left-width: 1.5px; border-top-width: 1.5px; }
+.pad-designator .tr { right: 0; top: 0; border-right-width: 1.5px; border-top-width: 1.5px; }
+.pad-designator .bl { left: 0; bottom: 0; border-left-width: 1.5px; border-bottom-width: 1.5px; }
+.pad-designator .br { right: 0; bottom: 0; border-right-width: 1.5px; border-bottom-width: 1.5px; }
+
+.pad-designator .designator-range {
+  position: absolute;
+  left: 50%;
+  top: 100%;
+  transform: translate(-50%, 5px);
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  color: rgba(124, 231, 208, 0.9);
+  text-shadow: 0 0 4px rgba(0, 0, 0, 0.9);
+  white-space: nowrap;
+}
+
 /* Pad locator */
 
 .pad-locator {

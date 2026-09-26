@@ -37,7 +37,14 @@ const starVertexShader = /* glsl */ `
   }
 `;
 
+// Stars are subject to the same exposure as everything else. Apollo surface
+// photographs show a black sky: an exposure short enough for sunlit regolith
+// is far too short to register stars. `threshold` removes stars fainter than
+// the exposure can record, and `gain` dims the survivors; the sky exposure is
+// only opened up when there is no sunlit ground in view (the menu backdrop).
 const starFragmentShader = /* glsl */ `
+  uniform float threshold;
+  uniform float gain;
   varying vec3 vColor;
   void main() {
     vec2 uv = gl_PointCoord - vec2(0.5);
@@ -45,10 +52,19 @@ const starFragmentShader = /* glsl */ `
     // Soft airy-disc-ish falloff; a hard dot reads as aliasing.
     float a = smoothstep(0.5, 0.06, d);
     a *= a;
+    float lum = max(vColor.r, max(vColor.g, vColor.b));
+    float recorded = smoothstep(threshold, threshold + 0.18, lum) * gain;
+    a *= recorded;
     if (a < 0.01) discard;
     gl_FragColor = vec4(vColor, a);
   }
 `;
+
+// Sky exposure: menu backdrop (no sunlit ground) versus on the surface.
+const SKY_EXPOSURE = {
+  open: { threshold: 0.0, gain: 1.0, milkyWay: 1.0 },
+  surface: { threshold: 0.98, gain: 0.55, milkyWay: 0.0 },
+};
 
 const atmosphereVertexShader = /* glsl */ `
   varying vec3 vNormal;
@@ -167,6 +183,10 @@ export default class Environment {
     geometry.setAttribute("starColor", new THREE.BufferAttribute(colors, 3));
 
     this.starMaterial = new THREE.ShaderMaterial({
+      uniforms: {
+        threshold: { value: SKY_EXPOSURE.open.threshold },
+        gain: { value: SKY_EXPOSURE.open.gain },
+      },
       vertexShader: starVertexShader,
       fragmentShader: starFragmentShader,
       transparent: true,
@@ -406,6 +426,19 @@ export default class Environment {
    */
   update(camera, focus, dt) {
     this.group.position.copy(camera.position);
+
+    // Ease the sky exposure between the open menu sky and the sunlit surface
+    // rather than popping the stars on and off.
+    const want = focus ? SKY_EXPOSURE.surface : SKY_EXPOSURE.open;
+    const k = 1 - Math.exp(-3 * Math.min(dt, 0.1));
+    const u = this.starMaterial.uniforms;
+    u.threshold.value += (want.threshold - u.threshold.value) * k;
+    u.gain.value += (want.gain - u.gain.value) * k;
+    if (this.milkyWay) {
+      const m = this.milkyWay.material;
+      m.opacity += (want.milkyWay - m.opacity) * k;
+      this.milkyWay.visible = m.opacity > 0.01;
+    }
 
     const target = focus ?? camera.position;
     this.sunLight.target.position.copy(target);

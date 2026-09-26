@@ -215,8 +215,9 @@ export default class Lander {
       const attach = new THREE.Vector3(dirX * DESCENT_RADIUS * 0.82, LEG_ATTACH_Y, dirZ * DESCENT_RADIUS * 0.82);
       const foot = new THREE.Vector3(dirX * GEAR_RADIUS, FOOTPAD_Y, dirZ * GEAR_RADIUS);
 
-      // Primary strut (the shock-absorbing cylinder).
-      const primary = this._strut(attach, foot, 0.115, a.metalMaterial);
+      // Primary strut (the shock-absorbing cylinder). On the real LM these
+      // were wrapped in the same gold Kapton as the descent stage.
+      const primary = this._strut(attach, foot, 0.115, a.foilMaterial);
       legGroup.add(primary);
 
       // Secondary struts brace the primary back to the descent stage.
@@ -300,7 +301,11 @@ export default class Lander {
 
     // Crew compartment: a squat cylinder with the LM's characteristic canted
     // front face carrying the two triangular windows.
-    const cabin = new THREE.Mesh(new THREE.CylinderGeometry(1.47, 1.47, 1.68, 16), a.panelMaterial);
+    // Faceted, not round: the ascent stage was built from flat skin panels,
+    // and smooth-shaded it read as a turned metal can.
+    const cabinGeo = new THREE.CylinderGeometry(1.47, 1.47, 1.68, 10).toNonIndexed();
+    cabinGeo.computeVertexNormals();
+    const cabin = new THREE.Mesh(cabinGeo, a.panelMaterial);
     cabin.position.y = 0.84;
     g.add(cabin);
 

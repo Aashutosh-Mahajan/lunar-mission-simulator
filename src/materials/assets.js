@@ -5,6 +5,8 @@ import {
   buildRegolithMaps,
   buildFoilMaps,
   buildPanelMaps,
+  buildConcreteMaps,
+  buildCapeGroundMap,
   buildEarthMaps,
   buildGlowSprite,
   buildDustSprite,
@@ -34,6 +36,8 @@ export async function buildAssets(onProgress = () => {}) {
   onProgress(0.58, "Finishing spacecraft panels…");
   await yieldToBrowser();
   assets.panel = buildPanelMaps(909, 256);
+  assets.concrete = buildConcreteMaps(3900, 256);
+  assets.capeGround = buildCapeGroundMap(1969, 1024, 26000);
 
   onProgress(0.68, "Painting Earth…");
   await yieldToBrowser();
@@ -116,19 +120,22 @@ export async function buildAssets(onProgress = () => {}) {
     map: assets.foilDark.map,
     normalMap: assets.foilDark.normalMap,
     roughnessMap: assets.foilDark.roughnessMap,
-    color: 0x6a6259,
-    metalness: 0.5,
-    roughness: 0.66,
+    // Black Kapton / thermal paint, which covered much of the ascent stage.
+    color: 0x34322f,
+    metalness: 0.35,
+    roughness: 0.62,
     normalScale: new THREE.Vector2(0.8, 0.8),
   });
 
+  // Anodised aluminium skin panels: satin, faintly metallic, seamed.
   assets.panelMaterial = new THREE.MeshStandardMaterial({
     map: assets.panel.map,
     normalMap: assets.panel.normalMap,
     roughnessMap: assets.panel.roughnessMap,
-    color: 0xb0b4b8,
-    metalness: 0.35,
-    roughness: 0.58,
+    color: 0xbfc2c4,
+    metalness: 0.45,
+    roughness: 0.5,
+    normalScale: new THREE.Vector2(0.6, 0.6),
   });
 
   assets.metalMaterial = new THREE.MeshStandardMaterial({
