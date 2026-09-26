@@ -544,3 +544,207 @@ export function buildCapeGroundMap(seed = 1969, size = 1024, extent = 26000) {
   tex.wrapT = THREE.ClampToEdgeWrapping;
   return tex;
 }
+
+// ---------------------------------------------------------------------------
+// Saturn V livery. Each stage's skin is one cylinder, so its paint scheme is a
+// single texture: u runs round the stage, v up it (canvas top = stage top).
+// Drawn at the stage's real proportions so markings keep their shape.
+// ---------------------------------------------------------------------------
+
+const PAINT_WHITE = "#f1f0eb";
+const PAINT_BLACK = "#1c1d20";
+
+/** Alternating black/white panels in a band — the roll pattern range cameras read. */
+function rollPattern(ctx, W, yTop, yBottom, segments, phase = 0) {
+  const w = W / segments;
+  ctx.fillStyle = PAINT_BLACK;
+  for (let k = 0; k < segments; k += 2) {
+    const x = ((k / segments + phase) % 1) * W;
+    ctx.fillRect(x, yTop, w, yBottom - yTop);
+    if (x + w > W) ctx.fillRect(x - W, yTop, w, yBottom - yTop); // wrap the seam
+  }
+}
+
+/** Faint stringer lines over a band, for the corrugated skin sections. */
+function stringers(ctx, W, yTop, yBottom, count, alpha) {
+  ctx.fillStyle = `rgba(90, 92, 96, ${alpha})`;
+  for (let k = 0; k < count; k++) ctx.fillRect((k / count) * W, yTop, 1, yBottom - yTop);
+}
+
+function seam(ctx, W, y, alpha = 0.35) {
+  ctx.fillStyle = `rgba(80, 82, 86, ${alpha})`;
+  ctx.fillRect(0, y - 1, W, 2);
+}
+
+/**
+ * Vertical lettering, drawn with the canvas stretched to cancel the texture's
+ * non-square texel aspect so the letters are the right shape on the stage.
+ */
+function verticalText(ctx, text, cx, yTop, letterPx, spacingPx, aspect) {
+  ctx.save();
+  ctx.fillStyle = PAINT_BLACK;
+  ctx.font = `bold ${letterPx}px "Arial Black", Arial, sans-serif`;
+  ctx.textAlign = "center";
+  ctx.textBaseline = "top";
+  let y = yTop;
+  for (const ch of text) {
+    if (ch !== " ") {
+      ctx.setTransform(1 / aspect, 0, 0, 1, cx, y);
+      ctx.fillText(ch, 0, 0);
+    }
+    y += spacingPx;
+  }
+  ctx.restore();
+}
+
+/** US flag, `w` by `h` pixels in world proportion, top-left at (x, y). */
+function flag(ctx, x, y, w, h) {
+  const stripe = h / 13;
+  for (let i = 0; i < 13; i++) {
+    ctx.fillStyle = i % 2 === 0 ? "#b22234" : "#f5f5f0";
+    ctx.fillRect(x, y + i * stripe, w, Math.ceil(stripe));
+  }
+  ctx.fillStyle = "#3c3b6e";
+  ctx.fillRect(x, y, w * 0.4, stripe * 7);
+}
+
+function liveryTexture(canvas) {
+  const tex = finishTexture(canvas, { srgb: true, aniso: 16 });
+  tex.wrapT = THREE.ClampToEdgeWrapping;
+  return tex;
+}
+
+/**
+ * @param {'sic'|'sii'|'sivb'} stage
+ * @param {number} length stage skin length, m
+ * @param {number} radius m
+ */
+export function buildSaturnLivery(stage, length, radius) {
+  const circumference = Math.PI * 2 * radius;
+  const W = 1024;
+  const H = stage === "sic" ? 2048 : 1024;
+  const canvas = document.createElement("canvas");
+  canvas.width = W;
+  canvas.height = H;
+  const ctx = canvas.getContext("2d");
+  ctx.fillStyle = PAINT_WHITE;
+  ctx.fillRect(0, 0, W, H);
+
+  // Height above the stage base (m) to canvas y, and metres to pixels.
+  const Y = (h) => (1 - h / length) * H;
+  const pxPerMu = W / circumference; // round the stage
+  const pxPerMv = H / length; // up the stage
+  const aspect = pxPerMu / pxPerMv;
+
+  if (stage === "sic") {
+    // Corrugated skin on the thrust structure, intertank and forward skirt.
+    stringers(ctx, W, Y(5.8), Y(0), 216, 0.18);
+    stringers(ctx, W, Y(23.7), Y(19.5), 216, 0.18);
+    stringers(ctx, W, Y(42.1), Y(38.5), 216, 0.18);
+    rollPattern(ctx, W, Y(5.8), Y(0), 8, 1 / 16);
+    rollPattern(ctx, W, Y(23.7), Y(19.5), 8, 1 / 16);
+    rollPattern(ctx, W, Y(42.1), Y(38.5), 8, 1 / 16);
+    for (const h of [5.8, 19.5, 23.7, 38.5]) seam(ctx, W, Y(h));
+    // Tank weld lines.
+    for (const h of [9.5, 13.5, 17.0, 27.5, 31.5, 35.0]) seam(ctx, W, Y(h), 0.12);
+
+    // "UNITED STATES" down two opposite sides, the flag above each.
+    const letter = 1.45 * pxPerMv;
+    for (const u of [0.25, 0.75]) {
+      const cx = u * W;
+      flag(ctx, cx - 1.5 * pxPerMu, Y(37.2), 3.0 * pxPerMu, 1.95 * pxPerMv);
+      verticalText(ctx, "UNITED STATES", cx, Y(34.4), letter, 1.72 * pxPerMv, aspect);
+    }
+  } else if (stage === "sii") {
+    // Interstage skirt at the bottom, the stage's forward skirt at the top.
+    stringers(ctx, W, Y(5.6), Y(0), 216, 0.16);
+    stringers(ctx, W, Y(length), Y(length - 2.6), 216, 0.16);
+    rollPattern(ctx, W, Y(length), Y(length - 2.6), 8, 1 / 16);
+    ctx.fillStyle = PAINT_BLACK;
+    ctx.fillRect(0, Y(5.75), W, Math.max(2, 0.3 * pxPerMv));
+    for (const h of [5.6, length - 2.6]) seam(ctx, W, Y(h));
+    for (const h of [9.5, 14.0, 18.5]) seam(ctx, W, Y(h), 0.1);
+  } else {
+    // S-IVB: aft skirt roll pattern; a thin forward band.
+    stringers(ctx, W, Y(3.0), Y(0), 144, 0.16);
+    stringers(ctx, W, Y(length), Y(length - 1.4), 144, 0.16);
+    rollPattern(ctx, W, Y(3.0), Y(0), 8, 1 / 16);
+    ctx.fillStyle = PAINT_BLACK;
+    ctx.fillRect(0, Y(length - 0.6), W, 0.35 * pxPerMv);
+    for (const h of [3.0, length - 1.4]) seam(ctx, W, Y(h));
+  }
+
+  return liveryTexture(canvas);
+}
+
+/**
+ * Service module skin: bare aluminium with the white-painted radiator panels
+ * that rejected the fuel cells' heat, and an "UNITED STATES" legend.
+ */
+export function buildServiceModuleLivery(length = 3.9, radius = 1.96) {
+  const W = 1024;
+  const H = 512;
+  const canvas = document.createElement("canvas");
+  canvas.width = W;
+  canvas.height = H;
+  const ctx = canvas.getContext("2d");
+  ctx.fillStyle = "#b9bcbf";
+  ctx.fillRect(0, 0, W, H);
+  // Radiator panels: two large white fields with fine tube lines.
+  for (const [u0, u1] of [[0.05, 0.3], [0.55, 0.8]]) {
+    ctx.fillStyle = "#e9e9e4";
+    ctx.fillRect(u0 * W, H * 0.12, (u1 - u0) * W, H * 0.76);
+    ctx.fillStyle = "rgba(120,120,120,0.25)";
+    for (let x = u0 * W; x < u1 * W; x += 6) ctx.fillRect(x, H * 0.12, 1, H * 0.76);
+  }
+  // Panel seams.
+  ctx.fillStyle = "rgba(60,62,66,0.5)";
+  for (let k = 0; k < 6; k++) ctx.fillRect((k / 6) * W, 0, 2, H);
+  ctx.fillRect(0, H * 0.1, W, 2);
+  ctx.fillRect(0, H * 0.9, W, 2);
+  // Legend across one of the bare panels.
+  const pxPerMu = W / (Math.PI * 2 * radius);
+  const pxPerMv = H / length;
+  ctx.save();
+  ctx.fillStyle = PAINT_BLACK;
+  ctx.font = `bold ${Math.round(0.28 * pxPerMv)}px Arial, sans-serif`;
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.setTransform(pxPerMu / pxPerMv, 0, 0, 1, 0.425 * W, H * 0.5);
+  ctx.fillText("UNITED STATES", 0, 0);
+  ctx.restore();
+  return liveryTexture(canvas);
+}
+
+/**
+ * Normal map for a regeneratively cooled nozzle: the F-1's chamber and bell
+ * were brazed from 178 coolant tubes, which is why real bells look ribbed.
+ */
+export function buildTubeWallNormal(tubes = 178) {
+  const W = 2048;
+  const H = 4;
+  const canvas = document.createElement("canvas");
+  canvas.width = W;
+  canvas.height = H;
+  const ctx = canvas.getContext("2d");
+  const img = ctx.createImageData(W, H);
+  for (let x = 0; x < W; x++) {
+    // Slope of a row of round tubes: the derivative of |sin|.
+    const phase = (x / W) * tubes * Math.PI;
+    const slope = Math.cos(phase) * Math.sign(Math.sin(phase)) * 0.7;
+    const len = Math.hypot(slope, 1);
+    const nx = -slope / len;
+    const nz = 1 / len;
+    for (let y = 0; y < H; y++) {
+      const i = (y * W + x) * 4;
+      img.data[i] = (nx * 0.5 + 0.5) * 255;
+      img.data[i + 1] = 128;
+      img.data[i + 2] = (nz * 0.5 + 0.5) * 255;
+      img.data[i + 3] = 255;
+    }
+  }
+  ctx.putImageData(img, 0, 0);
+  const tex = finishTexture(canvas, { aniso: 16 });
+  tex.wrapT = THREE.RepeatWrapping;
+  return tex;
+}
