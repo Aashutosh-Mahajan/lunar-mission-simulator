@@ -219,15 +219,18 @@ export default class Lander {
       // were wrapped in the same gold Kapton as the descent stage.
       const primary = this._strut(attach, foot, 0.115, a.foilMaterial);
       legGroup.add(primary);
+      const braces = [];
 
       // Secondary struts brace the primary back to the descent stage.
       const braceTop = new THREE.Vector3(dirX * DESCENT_RADIUS * 0.55, LEG_ATTACH_Y - DESCENT_HEIGHT * 0.86, dirZ * DESCENT_RADIUS * 0.55);
       const braceMid = foot.clone().lerp(attach, 0.34);
-      legGroup.add(this._strut(braceTop, braceMid, 0.062, a.metalMaterial));
+      braces.push(this._strut(braceTop, braceMid, 0.062, a.metalMaterial));
+      legGroup.add(braces[braces.length - 1]);
 
       // Deployment truss (the diagonal down-lock strut).
       const trussTop = new THREE.Vector3(dirX * DESCENT_RADIUS * 0.95, LEG_ATTACH_Y - 0.12, dirZ * DESCENT_RADIUS * 0.95);
-      legGroup.add(this._strut(trussTop, braceMid, 0.05, a.metalMaterial));
+      braces.push(this._strut(trussTop, braceMid, 0.05, a.metalMaterial));
+      legGroup.add(braces[braces.length - 1]);
 
       // Footpad — a shallow dish, wide to spread load on soft regolith.
       const padGroup = new THREE.Group();
@@ -261,7 +264,15 @@ export default class Lander {
         legGroup.add(probe);
       }
 
-      this.legs.push({ group: legGroup, foot: foot.clone(), padGroup, probe, dir: new THREE.Vector3(dirX, 0, dirZ) });
+      this.legs.push({
+        group: legGroup,
+        foot: foot.clone(),
+        attach: attach.clone(),
+        braces,
+        padGroup,
+        probe,
+        dir: new THREE.Vector3(dirX, 0, dirZ),
+      });
     }
 
     // Egress ladder on the forward leg.
@@ -282,6 +293,36 @@ export default class Lander {
       ladder.add(rung);
     }
     this.group.add(ladder);
+    this.ladder = ladder;
+  }
+
+  /**
+   * Folds the landing gear up against the descent stage, as it was stowed
+   * inside the adapter and all the way to the Moon — the crew deployed it in
+   * lunar orbit, before undocking. Each leg swings about its hinge on the
+   * stage; the braces fold away inside that motion, so they are hidden.
+   * @param {boolean} stowed
+   */
+  setGearStowed(stowed) {
+    const up = new THREE.Vector3(0, 1, 0);
+    for (const leg of this.legs) {
+      const reach = leg.foot.clone().sub(leg.attach).normalize();
+      // Folded almost upright, hugging the ascent stage.
+      const target = leg.dir.clone().multiplyScalar(0.1).add(up).normalize();
+      const q = stowed ? new THREE.Quaternion().setFromUnitVectors(reach, target) : new THREE.Quaternion();
+      // Rotate about the hinge: position = attach - q * attach.
+      leg.group.quaternion.copy(q);
+      leg.group.position.copy(leg.attach).sub(leg.attach.clone().applyQuaternion(q));
+      for (const b of leg.braces) b.visible = !stowed;
+      if (leg.probe) leg.probe.visible = !stowed;
+    }
+    // The ladder is mounted on the forward leg's strut.
+    if (this.ladder) {
+      const lead = this.legs[0].group;
+      this.ladder.quaternion.copy(lead.quaternion);
+      this.ladder.position.copy(lead.position);
+    }
+    this.gearStowed = stowed;
   }
 
   /** Builds a cylinder spanning two points (used for every strut). */
