@@ -104,11 +104,12 @@ function profileSvg(level) {
  * @param {(levelId:number)=>void} onChoose fly the site
  * @param {(levelId:number)=>void} [onAutoplay] watch the computer fly it
  */
-export function renderLevelSelect(onChoose, onAutoplay) {
+export function renderLevelSelect(onChoose, onAutoplay, autoplayAll = false) {
   const grid = document.getElementById("site-grid");
   const progress = document.getElementById("sites-progress");
   grid.innerHTML = "";
   progress.textContent = `${landedCount()} / ${LEVELS.length}`;
+  document.getElementById("sites-autoplay")?.classList.toggle("hidden", !autoplayAll);
 
   for (const level of LEVELS) {
     const unlocked = isLevelUnlocked(level.id);
@@ -141,7 +142,8 @@ export function renderLevelSelect(onChoose, onAutoplay) {
 
     if (unlocked) {
       card.addEventListener("click", () => onChoose(level.id));
-      if (onAutoplay) {
+      // With the menu's Autoplay switch on, the whole card already autoplays.
+      if (onAutoplay && !autoplayAll) {
         const auto = document.createElement("button");
         auto.type = "button";
         auto.className = "site-autoplay";

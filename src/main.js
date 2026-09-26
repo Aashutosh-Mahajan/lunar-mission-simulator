@@ -72,6 +72,9 @@ class Game {
     this.autoplayChain = false;
     this._autoplayUsed = false;
     this._chainTimer = 0;
+    // The main menu's Autoplay switch. Deliberately not persisted: a player
+    // who comes back tomorrow should not find the game flying itself.
+    this.menuAutoplay = false;
 
     this.settings = loadSettings();
     if (!localStorage.getItem("lunar-sim.settings.v1")) {
@@ -188,18 +191,23 @@ class Game {
       });
     };
 
+    // The three missions. The menu's Autoplay switch applies to all of them.
     click("btn-campaign", () => {
-      this.campaign.start();
-      this.startAscent();
+      if (this.menuAutoplay) {
+        this.watchMission();
+      } else {
+        this.campaign.start();
+        this.startAscent();
+      }
     });
-    click("btn-autoplay", () => this.watchMission());
+    click("autoplay-switch", () => this.setMenuAutoplay(!this.menuAutoplay));
     click("btn-pause-autoplay", () => {
       this.toggleAutoplay();
       if (this.autoplay.active) this.setPaused(false);
     });
     click("btn-launch", () => {
       this.campaign.reset();
-      this.startAscent();
+      this.startAscent({ autoplay: this.menuAutoplay });
     });
     click("btn-fly", () => {
       this.campaign.reset();
@@ -383,8 +391,9 @@ class Game {
     this._stopAutoplay();
     this._disposeRuntimes();
     renderLevelSelect(
-      (id) => this.startLevel(id),
-      (id) => this.startLevel(id, { autoplay: true })
+      (id) => this.startLevel(id, { autoplay: this.menuAutoplay }),
+      (id) => this.startLevel(id, { autoplay: true }),
+      this.menuAutoplay
     );
     this.screens.setHud(null);
     this.screens.show("sites");
@@ -887,6 +896,27 @@ class Game {
     this.audio.beep(this.autoplay.active ? 1180 : 640, 0.08, 0.07);
     this._syncAutoplayBadge();
     this._syncPauseMenu();
+  }
+
+  /**
+   * The main menu's Autoplay switch, which applies to all three missions:
+   * the full mission, the launch, and the descent (every site on the board).
+   */
+  setMenuAutoplay(on) {
+    this.menuAutoplay = on;
+    const sw = document.getElementById("autoplay-switch");
+    sw?.setAttribute("aria-checked", String(on));
+    sw?.classList.toggle("on", on);
+    const state = document.getElementById("autoplay-switch-state");
+    if (state) state.textContent = on ? "On — the computer flies every mission" : "Off — you fly";
+    const labels = on
+      ? { "btn-campaign": "▶ Watch the Full Mission", "btn-launch": "▶ Watch the Launch", "btn-fly": "▶ Watch a Landing" }
+      : { "btn-campaign": "Fly the Full Mission", "btn-launch": "Launch Only", "btn-fly": "Lunar Descent" };
+    for (const [id, text] of Object.entries(labels)) {
+      const btn = document.getElementById(id);
+      if (btn) btn.textContent = text;
+    }
+    this.audio.click?.();
   }
 
   /** Watch the whole mission, pad to surface, flown by the computer. */

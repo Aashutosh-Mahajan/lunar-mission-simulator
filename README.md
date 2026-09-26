@@ -138,9 +138,11 @@ Cadet one, whatever the scores.
 
 The game can fly itself, in every phase and at every difficulty:
 
-- **▶ Watch Autoplay** on the main menu flies the whole mission — launch, coast and
-  landing — moving on from each debrief by itself.
-- **▶ Autoplay** on any site card on the mission board flies that landing.
+- **The Autoplay switch** on the main menu applies to all three missions. With it on,
+  *Fly the Full Mission* flies launch, coast and landing, moving on from each debrief by
+  itself; *Launch Only* flies the launch to orbit; *Lunar Descent* flies whichever site
+  you pick on the mission board.
+- **▶ Autoplay** on a site card flies just that landing, with the switch off.
 - **`O`** (or the pause menu) hands control to the computer mid-flight, and takes it back.
 
 Autoplay is a virtual pilot, not a separate model: it produces the same controls a player

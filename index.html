@@ -38,12 +38,19 @@
               <button type="button" class="diff-opt" role="radio" data-diff="commander">Commander</button>
             </div>
             <p class="difficulty-summary" id="difficulty-summary"></p>
+
+            <!-- One switch for all three missions below: with it on, whichever
+                 mission is chosen is flown by the computer. -->
+            <button type="button" id="autoplay-switch" class="autoplay-switch" role="switch" aria-checked="false">
+              <span class="switch-track"><span class="switch-thumb"></span></span>
+              <span class="switch-label">Autoplay</span>
+              <span class="switch-state" id="autoplay-switch-state">Off — you fly</span>
+            </button>
           </div>
 
           <div class="menu-actions">
             <button id="btn-campaign" class="btn-primary">Fly the Full Mission</button>
             <button id="btn-launch" class="btn-ghost">Launch Only</button>
-            <button id="btn-autoplay" class="btn-ghost">▶ Watch Autoplay</button>
             <button id="btn-fly" class="btn-ghost">Lunar Descent</button>
             <button id="btn-controls" class="btn-ghost">Controls</button>
             <button id="btn-settings" class="btn-ghost">Graphics</button>
@@ -69,6 +76,7 @@
             <h2 class="heading">Landing Sites</h2>
           </div>
           <div class="sites-head-right">
+            <div id="sites-autoplay" class="sites-autoplay hidden">▶ AUTOPLAY ON — pick a site to watch</div>
             <div class="stat-chip"><span id="sites-progress">0 / 6</span> sites landed</div>
             <button id="btn-sites-back" class="btn-ghost small">Back</button>
           </div>
