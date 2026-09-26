@@ -28,6 +28,7 @@ import {
   getAscentBest,
 } from "./ui/leaderboard.js";
 import { loadSettings, saveSettings, bindSettingsUi, detectQuality } from "./ui/settings.js";
+import { bindDifficultyPicker } from "./ui/difficultyPicker.js";
 
 // Phase 2. Imported lazily inside startAscent so that deleting the ascent
 // files cannot break the descent trainer at module-load time.
@@ -56,6 +57,7 @@ class Game {
     this.canvas = document.getElementById("scene");
     this.scene = new THREE.Scene();
     this.camera = new THREE.PerspectiveCamera(55, window.innerWidth / window.innerHeight, 0.4, 22000);
+    this._viewDir = new THREE.Vector3();
 
     this.settings = loadSettings();
     if (!localStorage.getItem("lunar-sim.settings.v1")) {
@@ -97,7 +99,10 @@ class Game {
     this.world.allowSleep = false;
 
     this._bindUi();
-    window.addEventListener("resize", () => this.pipeline.resize());
+    window.addEventListener("resize", () => {
+      this.pipeline.resize();
+      this.particles?.setViewport(this.pipeline.renderer);
+    });
   }
 
   // -------------------------------------------------------------------------
@@ -129,9 +134,12 @@ class Game {
     );
 
     this.particles = new ParticleSystem(this.scene, this.assets);
+    this.particles.setViewport(this.pipeline.renderer);
+    this.pipeline.onResolutionChange = () => this.particles.setViewport(this.pipeline.renderer);
 
     this.applySettings();
     bindSettingsUi(this.settings, () => this.applySettings());
+    bindDifficultyPicker(this.settings, () => saveSettings(this.settings));
 
     // Level 1 is always available.
     unlockLevel(1);
@@ -146,6 +154,8 @@ class Game {
     this.environment?.setQuality(this.settings.quality);
     this.ascent?.earth.setQuality(this.settings.quality);
     this.particles?.setQuality(this.settings.particles);
+    // Quality changes the render scale, which changes the buffer height.
+    if (this.particles) this.particles.setViewport(this.pipeline.renderer);
     saveSettings(this.settings);
   }
 
@@ -250,6 +260,19 @@ class Game {
         break;
       }
 
+      case "rateHold": {
+        if (this.mode !== "descent" || !this.runtime || this.state !== "flight") break;
+        const assist = this.runtime.assist;
+        if (assist.mode === "full") {
+          this.hud.showHint("Autopilot owns the descent rate — Shift hovers, Ctrl descends faster");
+          break;
+        }
+        const on = assist.toggleRateHold();
+        this.hud.showHint(on ? "Descent-rate hold ON — engine throttled for you, Space overrides" : "Descent-rate hold OFF — manual throttle");
+        this.audio.beep(on ? 1180 : 640, 0.08, 0.07);
+        break;
+      }
+
       case "toggleStabiliser": {
         if (this.mode !== "descent" || !this.runtime) break;
         const s = this.runtime.lander.state;
@@ -262,10 +285,7 @@ class Game {
       // ---- Phase 2 -------------------------------------------------------
       case "stage": {
         if (this.mode !== "ascent" || this.state !== "flight" || !this.ascent) break;
-        if (this.ascent.stage()) {
-          this.ascentCamera.kick(1.5);
-          this.audio.stagingBang();
-        } else {
+        if (!this.ascent.stage()) {
           this.ascentHud.showHint("No stage left to drop — this is the last one", 2.4);
         }
         break;
@@ -279,7 +299,6 @@ class Game {
           this.audio.stopLaunchEngine();
         } else if (this.mode === "ascent" && this.ascent) {
           this.ascent.attemptInsertion();
-          this.audio.stopLaunchEngine();
         }
         break;
       }
@@ -399,6 +418,7 @@ class Game {
       particles: this.particles,
       assets: this.assets,
       audio: this.audio,
+      difficulty: this.settings.difficulty,
     });
 
     this.runtime.onTouchdownEffect = (energy) => {
@@ -416,9 +436,11 @@ class Game {
       this.audio.beep(onTarget ? 1320 : 880, 0.22, 0.1, "sine");
     };
 
-    this.hud.setLevel(config);
+    // The HUD and coach work from the runtime's config: it carries the
+    // difficulty's limits, which are what the gauges should mark.
+    this.hud.setLevel(this.runtime.config);
     this.hud.reset();
-    this.coach.setLevel(config);
+    this.coach.setLevel(this.runtime.config);
     this.cameraRig.reset();
     this.cameraRig.setMode("chase");
     this.cameraRig.distance = 26;
@@ -471,7 +493,10 @@ class Game {
       particles: this.particles,
       assets: this.assets,
       audio: this.audio,
+      difficulty: this.settings.difficulty,
     });
+    this._directorHintTimer = 0;
+    this._windowHintShown = false;
     this.ascent.earth.setQuality(this.settings.quality);
 
     this.ascent.onEvent = (text) => {
@@ -480,13 +505,29 @@ class Game {
     this.ascent.onIgnition = () => this.ascentCamera.kick(0.9);
     this.ascent.onLiftoff = () => {
       this.ascentCamera.kick(1.6);
-      this.ascentHud.showHint("Pitch program engaged — hold the commanded needle", 5);
+      const a = this.ascent.assists;
+      this.ascentHud.showHint(
+        a.autoGuidance
+          ? "Autopilot is flying the ascent — staging and cut-off are automatic. C changes camera, . speeds up time"
+          : a.autoStage
+            ? "Pitch program engaged. Later, steer CMD onto the magenta FD bracket with W/S"
+            : "Pitch program engaged — stage with SPACE at each burnout",
+        6
+      );
     };
     this.ascent.onStageReady = () => {
-      this.ascentHud.showHint("Burnout — press SPACE to stage", 5);
+      this.ascentHud.showHint(
+        this.ascent.assists.autoStage ? "Burnout — staging" : "Burnout — press SPACE to stage",
+        this.ascent.assists.autoStage ? 2 : 5
+      );
       this.audio.beep(980, 0.12, 0.09);
     };
-    this.ascent.onStaging = () => this.ascentCamera.kick(1.4);
+    // Effects live here rather than on the key handler, so a separation the
+    // autopilot commands looks and sounds exactly like one the player does.
+    this.ascent.onStaging = () => {
+      this.ascentCamera.kick(1.5);
+      this.audio.stagingBang();
+    };
     this.ascent.onFailure = () => {
       this.pipeline.flash(0.7);
       this.ascentCamera.kick(3);
@@ -494,6 +535,7 @@ class Game {
       this.audio.crash(1.3);
     };
     this.ascent.onInsertion = (ok) => {
+      this.audio.stopLaunchEngine();
       this.audio.beep(ok ? 1320 : 660, 0.3, 0.11, "sine");
     };
 
@@ -511,12 +553,16 @@ class Game {
 
   _finishAscent() {
     const result = this.ascent.result;
-    const bestInfo = recordAscentResult(result.outcome, result.stats);
+    // The banner is normally hidden by the flight loop; the debrief must not
+    // depend on that having run since the count ended.
+    this.screens.setCountdownVisible(false);
+    const bestInfo = recordAscentResult(result.outcome, result.stats, this.settings.difficulty);
 
-    renderAscentDebrief(result, {
-      best: bestInfo.best ?? getAscentBest(),
-      improved: bestInfo.improved,
-    });
+    renderAscentDebrief(
+      result,
+      { best: bestInfo.best ?? getAscentBest(), improved: bestInfo.improved },
+      this.ascent.mission
+    );
 
     this._applyCampaignUi("screen-ascent-result", "ascent", result.outcome === "orbit", {
       button: "btn-asc-descent",
@@ -543,6 +589,7 @@ class Game {
     this.environment.setEnabled(false);
 
     this.coast = new CoastRuntime({
+      difficulty: this.settings.difficulty,
       scene: this.scene,
       assets: this.assets,
       audio: this.audio,
@@ -722,7 +769,7 @@ class Game {
   _finishMission() {
     const runtime = this.runtime;
     const result = runtime.result;
-    const bestInfo = recordResult(this.currentLevelId, result.outcome, result.stats);
+    const bestInfo = recordResult(this.currentLevelId, result.outcome, result.stats, this.settings.difficulty);
 
     renderDebrief(
       result,
@@ -772,7 +819,14 @@ class Game {
       const simulating = this.state === "flight" || this.state === "result";
 
       if (simulating) {
-        this.runtime.update(dt, this.state === "flight" ? controls : this._neutralControls());
+        const flown = this.state === "flight" ? controls : this._neutralControls();
+        // The camera's heading, flattened onto the ground plane. Full assist
+        // steers relative to it, so W always means "away from me".
+        this.camera.getWorldDirection(this._viewDir);
+        const len = Math.hypot(this._viewDir.x, this._viewDir.z) || 1;
+        flown.view = { x: this._viewDir.x / len, z: this._viewDir.z / len };
+        this._lastView = flown.view;
+        this.runtime.update(dt, flown);
       }
 
       // Camera controls work in every state so the player can look around
@@ -785,7 +839,7 @@ class Game {
 
       this.particles.update(dt);
       this.hud.update(this.runtime, this.camera, dt);
-      if (this.state === "flight") this.coach.update(this.runtime, dt);
+      if (this.state === "flight") this.coach.update(this.runtime, dt, this._lastView);
 
       this._updateAudio(dt, controls);
 
@@ -807,7 +861,38 @@ class Game {
     }
 
     this.audio.update(dt);
-    this.pipeline.render(dt, this.elapsed);
+    this.pipeline.render(dt, this.elapsed, raw);
+  }
+
+  /**
+   * Coaching for the settings where the player flies the late ascent: the
+   * flight director's recommendation as a nudge, and a call when the stack is
+   * inside the insertion window.
+   */
+  _ascentCues(dt) {
+    const a = this.ascent;
+    if (a.status !== "flying") return;
+
+    if (!a.assists.autoGuidance && a.guidanceBias !== null) {
+      this._directorHintTimer -= dt;
+      const error = a.guidanceBias - a.state.pitchBias;
+      if (Math.abs(error) > 4 && this._directorHintTimer <= 0) {
+        this.ascentHud.showHint(
+          error < 0 ? "Flight director: nose DOWN — hold S" : "Flight director: nose UP — hold W",
+          2.4
+        );
+        this._directorHintTimer = 4;
+      }
+    }
+
+    if (!a.assists.autoInsert) {
+      const inWindow = a.inWindow;
+      if (inWindow && !this._windowHintShown) {
+        this.ascentHud.showHint("Inside the insertion window — press I to cut off", 8);
+        this.audio.beep(1480, 0.14, 0.1, "sine");
+      }
+      this._windowHintShown = inWindow;
+    }
   }
 
   _neutralControls() {
@@ -866,6 +951,7 @@ class Game {
 
     this.particles.update(dt);
     this.ascentHud.update(this.ascent, dt);
+    if (live) this._ascentCues(dt);
 
     // Audio thins out with the air, leaving only structure-borne rumble.
     const density = pressureRatio(this.ascent.telemetry.altitude);
@@ -906,7 +992,12 @@ class Game {
 }
 
 const game = new Game();
-if (import.meta.env.DEV) window.__game = game;
+if (import.meta.env.DEV) {
+  window.__game = game;
+  // Dynamic import inside a DEV guard: Vite drops the whole branch, and the
+  // harness with it, from production builds.
+  import("./dev/harness.js").then((m) => m.installHarness(game));
+}
 game.init().catch((err) => {
   console.error(err);
   const status = document.getElementById("load-status");

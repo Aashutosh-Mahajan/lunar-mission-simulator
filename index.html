@@ -26,9 +26,20 @@
           <div class="mission-tag">Lunar Surface Operations · Descent Trainer</div>
           <h1 class="title">Lunar Mission<span>Simulator</span></h1>
           <p class="tagline">
-            Hand-flown descent under 1.62 m/s&sup2;. Throttleable engine, reaction-control
-            attitude, finite propellant. Six sites, no second chances.
+            Fly an Apollo mission from the pad to the lunar surface: Saturn V ascent,
+            trans-lunar injection, and a powered descent onto six real landing sites.
           </p>
+
+          <div class="difficulty">
+            <div class="difficulty-label">Difficulty</div>
+            <div class="difficulty-picker" id="difficulty-picker" role="radiogroup" aria-label="Difficulty">
+              <button type="button" class="diff-opt" role="radio" data-diff="cadet">Cadet</button>
+              <button type="button" class="diff-opt" role="radio" data-diff="pilot">Pilot</button>
+              <button type="button" class="diff-opt" role="radio" data-diff="commander">Commander</button>
+            </div>
+            <p class="difficulty-summary" id="difficulty-summary"></p>
+          </div>
+
           <div class="menu-actions">
             <button id="btn-campaign" class="btn-primary">Fly the Full Mission</button>
             <button id="btn-launch" class="btn-ghost">Launch Only</button>
@@ -40,12 +51,7 @@
             The full mission runs pad to surface in one flight: Saturn V ascent to a
             parking orbit, trans-lunar injection and the coast, then the landing.
           </p>
-          <div class="menu-foot">
-            <span><b>Space</b> main engine</span>
-            <span><b>W A S D</b> attitude</span>
-            <span><b>Shift / Ctrl</b> throttle</span>
-            <span><b>C</b> camera</span>
-          </div>
+          <div class="menu-foot" id="menu-foot"></div>
         </div>
       </section>
 
@@ -155,6 +161,7 @@
           <div class="mode-row">
             <div class="mode-pill" id="pill-sas">ATT HOLD</div>
             <div class="mode-pill" id="pill-engine">ENGINE</div>
+            <div class="mode-pill" id="pill-assist">MANUAL</div>
           </div>
         </div>
 
@@ -262,6 +269,32 @@
         <div class="panel wide">
           <div class="mission-tag">Crew Procedures</div>
           <h2 class="heading">Controls</h2>
+
+          <div class="help-grid help-difficulty">
+            <div class="help-col">
+              <h3>Cadet — autopilot flies, you steer</h3>
+              <div class="key-row"><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd><span>Fly toward — away, left, back, right <em>from the camera</em></span></div>
+              <div class="key-row"><kbd>Shift</kbd><span>Hover in place</span></div>
+              <div class="key-row"><kbd>Ctrl</kbd><span>Come down faster</span></div>
+              <div class="key-row"><kbd>Space</kbd><span>Climb</span></div>
+              <p class="help-note">
+                Let go of the keys and the lander stops drifting and settles itself down.
+                On launch the computer stages, steers and cuts off for you; in the coast it
+                cuts the burns off on target — you only hold <kbd>Space</kbd>.
+              </p>
+            </div>
+            <div class="help-col">
+              <h3>Pilot &amp; Commander — you fly it</h3>
+              <div class="key-row"><kbd>G</kbd><span>Descent-rate hold — throttles for you (P66 mode)</span></div>
+              <p class="help-note">
+                <em>Pilot</em> kills your drift whenever you let go of the steering keys,
+                stages the rocket automatically and gives wider margins.
+                <em>Commander</em> is direct control at the real Apollo limits.
+                Land a site on each setting to earn its bronze, silver and gold medals.
+              </p>
+            </div>
+          </div>
+
           <div class="help-grid">
             <div class="help-col">
               <h3>Propulsion</h3>
@@ -288,7 +321,7 @@
                 cockpit — pan their look instead. Switching camera resets the swing.
               </p>
               <h3>Mission</h3>
-              <div class="key-row"><kbd>R</kbd><span>Restart descent</span></div>
+              <div class="key-row"><kbd>R</kbd><span>Restart the current flight</span></div>
               <div class="key-row"><kbd>P</kbd><kbd>Esc</kbd><span>Pause</span></div>
               <div class="key-row"><kbd>M</kbd><span>Mute audio</span></div>
               <div class="key-row"><kbd>H</kbd><span>This screen</span></div>
@@ -336,13 +369,13 @@
 
               <h3>How to reach orbit</h3>
               <p class="help-note">
-                Hold the pitch needle on the commanded mark — that is the gravity turn.
-                Through <em>max-Q</em> around 13 km, throttle back so dynamic pressure stays
-                off the red; large angle of attack in thick air will break the vehicle.
-                Stage as soon as a tank runs dry. In the upper stages, flatten out and build
-                horizontal speed — altitude alone is not orbit. Cut off with <em>I</em> when
-                altitude, horizontal velocity <em>and</em> flight path angle are all inside
-                the insertion window.
+                The pitch program flies the gravity turn — leave it alone through the
+                thick air; a large angle of attack there breaks the vehicle. Above about
+                32 km a magenta <em>FD</em> bracket appears on the pitch tape: use
+                <kbd>W</kbd>/<kbd>S</kbd> to hold the amber CMD needle inside it and the
+                climb flattens into orbit by itself. Stage when a tank runs dry (automatic
+                on Cadet and Pilot). Cut off with <kbd>I</kbd> when altitude, horizontal
+                velocity <em>and</em> flight path angle are all inside the insertion window.
               </p>
             </div>
           </div>
@@ -377,6 +410,10 @@
             <label class="setting-row">
               <span>Antialiasing</span>
               <input type="checkbox" id="set-aa" checked />
+            </label>
+            <label class="setting-row">
+              <span>Adaptive resolution <small class="setting-note">keeps the frame rate smooth</small></span>
+              <input type="checkbox" id="set-adaptive" checked />
             </label>
             <label class="setting-row">
               <span>Particle density</span>
@@ -537,12 +574,14 @@
             <div class="pitch-mark" style="top:33%"><span>60</span></div>
             <div class="pitch-mark" style="top:66%"><span>30</span></div>
             <div class="pitch-mark" style="top:100%"><span>0</span></div>
+            <div id="pitch-fd-needle" class="pitch-needle fd hidden"></div>
             <div id="pitch-cmd-needle" class="pitch-needle cmd"></div>
             <div id="pitch-needle" class="pitch-needle actual"></div>
           </div>
           <div class="pitch-values">
             <div><span class="readout-label">PITCH</span><span class="mono" id="asc-pitch">90.0°</span></div>
             <div><span class="readout-label">CMD</span><span class="mono cmd-value" id="asc-pitch-cmd">90.0°</span></div>
+            <div id="asc-pitch-fd-row" class="dim"><span class="readout-label">FD</span><span class="mono fd-value" id="asc-pitch-fd">—</span></div>
           </div>
         </div>
 
