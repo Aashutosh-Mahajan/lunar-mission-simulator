@@ -1,8 +1,10 @@
 import * as THREE from "three";
 import Terrain from "../entities/Terrain.js";
 import Lander from "../entities/Lander.js";
-import { stepLanderPhysics, flightData, ventAccelAt } from "../physics/landerPhysics.js";
+import { stepLanderPhysics, flightData, ventAccelAt, gravityAt } from "../physics/landerPhysics.js";
+import LanderAssist from "../physics/landerAssist.js";
 import { getLevelById } from "./levelConfig.js";
+import { applyDescentDifficulty, DEFAULT_DIFFICULTY } from "./difficulty.js";
 import { PHYSICS_FIXED_STEP, DUST_ONSET_ALTITUDE } from "../constants.js";
 
 // ---------------------------------------------------------------------------
@@ -23,14 +25,18 @@ const MAX_SAFE_SLOPE = 15; // degrees; steeper and the gear tips over
 const CONTACT_PROBE_LENGTH = 1.7; // m, the LM's surface-sensing probes
 
 export default class LevelRuntime {
-  constructor({ scene, world, levelId, particles, assets, audio }) {
+  constructor({ scene, world, levelId, particles, assets, audio, difficulty = DEFAULT_DIFFICULTY }) {
     this.scene = scene;
     this.world = world;
     this.particles = particles;
     this.assets = assets;
     this.audio = audio;
 
-    this.config = getLevelById(levelId);
+    // The difficulty widens margins and chooses the flight-control assist; the
+    // site itself (terrain, start, hazards) is identical at every setting.
+    this.difficulty = difficulty;
+    this.config = applyDescentDifficulty(getLevelById(levelId), difficulty);
+    this.assist = new LanderAssist(this.config.assist);
     this.elapsed = 0;
     this.result = null;
     this.status = "flying";
@@ -66,7 +72,8 @@ export default class LevelRuntime {
 
     if (this.status === "flying") {
       this.elapsed += dt;
-      this.diagnostics = stepLanderPhysics(this.lander, this.config, controls, dt, this.elapsed);
+      const flown = this._applyAssist(controls);
+      this.diagnostics = stepLanderPhysics(this.lander, this.config, flown, dt, this.elapsed);
     }
 
     this.telemetry = flightData(this.lander, this.terrain);
@@ -98,6 +105,19 @@ export default class LevelRuntime {
 
     this.lander.updateVisuals(dt, this.elapsed);
     return this.telemetry;
+  }
+
+  /** Runs the player's inputs through the active flight-control assist. */
+  _applyAssist(controls) {
+    const s = this.lander.state;
+    return this.assist.apply(controls, {
+      lander: this.lander,
+      telemetry: this.telemetry,
+      gravity: gravityAt(this.config, s.position.x, s.position.z),
+      padVelocity: this.terrain.movingPad ? this.terrain.padVelocity : null,
+      padDistance: this.terrain.distanceToPad(s.position.x, s.position.z),
+      view: controls.view,
+    });
   }
 
   _processContacts() {

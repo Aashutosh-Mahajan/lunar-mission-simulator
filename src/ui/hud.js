@@ -13,6 +13,8 @@ import { LUNAR_GRAVITY } from "../constants.js";
 // ---------------------------------------------------------------------------
 
 const MAX_DISPLAY_TILT = 45; // degrees at the outer edge of the attitude dial
+// Above the near-surface zone, only a lean this large earns an advisory.
+const ATTITUDE_ADVISORY_TILT = 35; // degrees
 const INSTRUMENT_RADIUS = 88;
 const LPD_MAX_RANGE = 220; // m mapped to the edge of the cross-pointer
 const LPD_MAX_DRIFT = 8; // m/s mapped to a full-length velocity vector
@@ -54,6 +56,7 @@ export default class Hud {
 
       pillSas: el("pill-sas"),
       pillEngine: el("pill-engine"),
+      pillAssist: el("pill-assist"),
 
       attMarker: el("att-marker"),
       attMarkerCircle: document.querySelector("#att-marker .inst-marker"),
@@ -186,6 +189,7 @@ export default class Hud {
 
     this.dom.pillSas.classList.toggle("on", s.stabiliser);
     this.dom.pillEngine.classList.toggle("on", s.engineOn);
+    this._updateAssistPill(runtime.assist);
 
     // --- Attitude dial ----------------------------------------------------
     lander.upVector(this._up);
@@ -207,7 +211,7 @@ export default class Hud {
     this.dom.attMarkerCircle.setAttribute("cy", my.toFixed(1));
     this.dom.attMarkerLine.setAttribute("x2", mx.toFixed(1));
     this.dom.attMarkerLine.setAttribute("y2", my.toFixed(1));
-    this.dom.attMarkerCircle.classList.toggle("warning", t.tilt > limits.maxTilt);
+    this.dom.attMarkerCircle.classList.toggle("warning", t.gearAltitude < 60 && t.tilt > limits.maxTilt);
 
     // Bearing to the pad, as a needle around the dial rim.
     this._delta.subVectors(terrain.padCenter, s.position);
@@ -246,13 +250,18 @@ export default class Hud {
     const ventAccel = runtime.diagnostics?.ventAccel ?? 0;
     const velWarn = nearSurface &&
       (descentRate > limits.maxVerticalSpeed || drift > limits.maxHorizontalSpeed);
-    const attWarn = t.tilt > limits.maxTilt;
+    // Leaning is how the vehicle steers, so a lean well past the landing
+    // limit is normal up high. It only threatens the vehicle close to the
+    // ground; above that it is an amber advisory at most. (This used to fire
+    // the red light and the master alarm on every steering input.)
+    const attWarn = nearSurface && t.tilt > limits.maxTilt;
+    const attAdvisory = !nearSurface && t.tilt > ATTITUDE_ADVISORY_TILT;
     const fuelWarn = fuelFrac < 0.12;
 
     this._light(this.dom.cwContact, s.contactProbe, "ok");
     this._light(this.dom.cwFuel, fuelFrac < 0.28, fuelWarn ? "danger" : "on");
     this._light(this.dom.cwVel, velWarn, "danger");
-    this._light(this.dom.cwAtt, attWarn, "danger");
+    this._light(this.dom.cwAtt, attWarn || attAdvisory, attWarn ? "danger" : "on");
     this._light(this.dom.cwRcs, rcsFrac < 0.2, "on");
     this._light(this.dom.cwVent, ventAccel > 0.12, "on");
 
@@ -312,6 +321,26 @@ export default class Hud {
   _light(node, on, cls) {
     node.classList.remove("on", "danger", "ok");
     if (on) node.classList.add(cls);
+  }
+
+  /** Which flight-control assist is flying, and what it is doing right now. */
+  _updateAssistPill(assist) {
+    const pill = this.dom.pillAssist;
+    if (!pill || !assist) return;
+    let text = "MANUAL";
+    let on = false;
+    if (assist.mode === "full") {
+      text = assist.arresting ? "AUTO · HOLD" : "AUTOPILOT";
+      on = true;
+    } else if (assist.rateHold) {
+      text = "RATE HOLD";
+      on = true;
+    } else if (assist.mode === "drift") {
+      text = "DRIFT KILL";
+      on = assist.active;
+    }
+    if (pill.textContent !== text) pill.textContent = text;
+    pill.classList.toggle("on", on);
   }
 
   reset() {

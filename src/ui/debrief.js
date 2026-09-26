@@ -1,3 +1,4 @@
+import { DIFFICULTIES } from "../levels/difficulty.js";
 // Mission report screen: grades the descent against the level's limits and
 // shows which parameters were inside them.
 
@@ -60,6 +61,9 @@ export function renderDebrief(result, config, bestInfo, hasNext) {
     ),
     row("RCS remaining", `${stats.rcsRemaining.toFixed(0)} kg`, null),
     row("Time of descent", `${stats.time.toFixed(1)} s`, null),
+    config.flightDifficulty
+      ? row("Flown on", DIFFICULTIES[config.flightDifficulty]?.label ?? config.flightDifficulty, null)
+      : "",
   ].join("");
 
   document.getElementById("result-table").innerHTML = table;

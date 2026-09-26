@@ -1,5 +1,6 @@
 import { LEVELS } from "../levels/levelConfig.js";
-import { getBest, isLevelUnlocked, landedCount } from "./leaderboard.js";
+import { getBest, isLevelUnlocked, landedCount, recordDifficulty, MEDALS } from "./leaderboard.js";
+import { DIFFICULTIES, DIFFICULTY_ORDER } from "../levels/difficulty.js";
 import { makeSimplex2, fbm, ridged } from "../materials/noise.js";
 
 // ---------------------------------------------------------------------------
@@ -127,6 +128,12 @@ export function renderLevelSelect(onChoose) {
           <span class="badge ${difficultyClass}">${level.difficulty}</span>
           ${unlocked ? `<span class="badge">${level.fuel.descent} kg prop</span>` : ""}
           ${best ? `<span class="badge best">Best ${best.score}</span>` : ""}
+        </div>
+        <div class="site-medals${unlocked ? "" : " hidden"}" title="Land this site on each difficulty to earn its medal">
+          ${DIFFICULTY_ORDER.map((d) => {
+            const earned = best && DIFFICULTY_ORDER.indexOf(recordDifficulty(best)) >= DIFFICULTY_ORDER.indexOf(d);
+            return `<span class="medal ${MEDALS[d]}${earned ? " earned" : ""}" aria-label="${MEDALS[d]} medal${earned ? " earned" : ""}">${DIFFICULTIES[d].label}</span>`;
+          }).join("")}
         </div>
       </div>
     `;

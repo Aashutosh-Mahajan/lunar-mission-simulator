@@ -13,6 +13,7 @@ import {
   RCS_TILT_LIMIT,
   RCS_LEVEL_RATE,
   RCS_FLOW_PER_AXIS,
+  ASSIST,
 } from "../constants.js";
 
 // ---------------------------------------------------------------------------
@@ -44,6 +45,8 @@ const _tmp = new THREE.Vector3();
 const _dq = new THREE.Quaternion();
 const _limitQuat = new THREE.Quaternion();
 const _omegaWorld = new THREE.Vector3();
+const _slewAxis = new THREE.Vector3();
+const _invQuat = new THREE.Quaternion();
 const WORLD_UP = new THREE.Vector3(0, 1, 0);
 
 /**
@@ -130,6 +133,13 @@ export function stepLanderPhysics(lander, config, controls, dt, elapsed) {
   s.commandedThrottle += (controls.throttleUp - controls.throttleDown) * THROTTLE_RATE * dt;
   s.commandedThrottle = THREE.MathUtils.clamp(s.commandedThrottle, 0, 1);
 
+  // An assist holding a descent rate supplies the throttle directly; keep the
+  // commanded setting in step so the HUD shows what the engine is being asked
+  // for, and so taking manual control back does not jump the throttle.
+  if (controls.throttleOverride !== undefined) {
+    s.commandedThrottle = controls.throttleOverride;
+  }
+
   // The momentary "burn" key overrides the throttle setting while held, which
   // keeps the vehicle flyable without constantly nursing the throttle.
   const demanded = controls.burn ? 1 : s.commandedThrottle;
@@ -193,7 +203,31 @@ export function stepLanderPhysics(lander, config, controls, dt, elapsed) {
   // until the engine points downward, which is unrecoverable; without the
   // levelling, every correction leaves the vehicle permanently leaning and
   // thrusting sideways.
-  if (s.stabiliser) {
+  //
+  // An assist can instead supply a target attitude (attitude-command mode, as
+  // the LM's autopilot flew): the vehicle slews its thrust axis toward it at a
+  // fixed rate, with residual rates damped out so it arrives without
+  // overshooting.
+  const commandMode = Boolean(controls.targetUp) && s.stabiliser && rcsAvailable;
+  let slewBody = null;
+  if (commandMode) {
+    lander.upVector(_up);
+    const target = controls.targetUp;
+    const angle = Math.acos(THREE.MathUtils.clamp(_up.dot(target), -1, 1));
+    const step = Math.min(angle, ASSIST.SLEW_RATE * DEG * dt);
+    _slewAxis.crossVectors(_up, target);
+    if (step > 1e-6 && _slewAxis.lengthSq() > 1e-10) {
+      _slewAxis.normalize();
+      _limitQuat.setFromAxisAngle(_slewAxis, step);
+      s.quaternion.premultiply(_limitQuat).normalize();
+      // Which jets that slew fires, in the body frame, for the RCS visuals.
+      slewBody = _tmp.copy(_slewAxis).applyQuaternion(_invQuat.copy(s.quaternion).invert());
+    }
+    // The autopilot owns pitch and roll; bleed any rate it did not ask for.
+    const damp = 1 - Math.exp(-RCS_DAMPING * 2 * dt);
+    w.x -= w.x * damp;
+    w.z -= w.z * damp;
+  } else if (s.stabiliser) {
     lander.upVector(_up);
     const tilt = Math.acos(THREE.MathUtils.clamp(_up.y, -1, 1));
     const limit = RCS_TILT_LIMIT * DEG;
@@ -220,7 +254,12 @@ export function stepLanderPhysics(lander, config, controls, dt, elapsed) {
     }
   }
 
-  s.rcsFiring.set(cmdPitch, cmdYaw, cmdRoll);
+  if (slewBody) {
+    const k = Math.min(1, ASSIST.SLEW_RATE * 0.05);
+    s.rcsFiring.set(slewBody.x * k, cmdYaw, slewBody.z * k);
+  } else {
+    s.rcsFiring.set(cmdPitch, cmdYaw, cmdRoll);
+  }
 
   // -----------------------------------------------------------------------
   // Translation
@@ -252,9 +291,10 @@ export function stepLanderPhysics(lander, config, controls, dt, elapsed) {
   _accel.add(vent);
 
   // RCS propellant burn.
-  if ((rcsActive || rcsTranslating) && rcsAvailable) {
+  if ((rcsActive || rcsTranslating || slewBody) && rcsAvailable) {
     const axes =
-      Math.abs(cmdPitch) + Math.abs(cmdYaw) + Math.abs(cmdRoll) + (rcsTranslating ? 1 : 0);
+      Math.abs(cmdPitch) + Math.abs(cmdYaw) + Math.abs(cmdRoll) + (rcsTranslating ? 1 : 0) +
+      (slewBody ? 0.5 : 0);
     s.rcsFuel = Math.max(0, s.rcsFuel - RCS_FLOW_PER_AXIS * axes * dt);
   }
 

@@ -70,6 +70,60 @@ export const RCS_TILT_LIMIT = 45; // degrees from vertical
 // every correction leaves the vehicle permanently leaning.
 export const RCS_LEVEL_RATE = 20; // degrees/second
 
+// Flight-control assists (physics/landerAssist.js). Modelled on the LM's own
+// autopilot modes; see that file for how they are used.
+export const ASSIST = {
+  // How fast the attitude-command autopilot slews toward its target attitude.
+  // Comparable to the LM's RCS-limited rates, and quick enough that a change
+  // of travel direction feels responsive.
+  SLEW_RATE: 28, // degrees/second
+
+  // Scheduled sink rate: SINK_RATE_MIN + h * SINK_RATE_PER_METRE, clamped.
+  // At 150 m this is ~6 m/s; it tapers to about 1 m/s at contact, which is
+  // the LM's own design touchdown rate.
+  SINK_RATE_MIN: 0.9, // m/s
+  SINK_RATE_PER_METRE: 0.034, // (m/s)/m
+  SINK_RATE_MAX: 6.0, // m/s
+  FAST_DESCENT_FACTOR: 1.8,
+  CLIMB_RATE: 2.0, // m/s, Space in full assist
+
+  // Commanded travel speed for W A S D in full assist, also shrinking near the
+  // ground so the final approach cannot arrive fast.
+  TRAVEL_SPEED_MIN: 2.0, // m/s
+  TRAVEL_SPEED_PER_METRE: 0.06, // (m/s)/m
+  TRAVEL_SPEED_MAX: 10.0, // m/s
+
+  // Guidance gains (1/s): how quickly velocity errors are closed.
+  VELOCITY_GAIN: 0.65,
+  RATE_GAIN: 1.4,
+  // Floor on vertical acceleration, as a fraction of g — a rocket cannot pull
+  // downward, so never demand it.
+  MIN_VERTICAL_G: 0.25,
+
+  // Lean limits: full assist, drift-kill, and the tighter caps near the ground.
+  MAX_TILT: 26, // degrees
+  DRIFT_KILL_TILT: 16, // degrees
+  LOW_ALTITUDE: 14, // m above the footpads
+  LOW_TILT: 18, // degrees
+  FLARE_ALTITUDE: 1.5, // m above the footpads
+  FLARE_TILT: 6, // degrees
+
+  // Drift arrest: below this height, if the drift error is larger than
+  // ARREST_DRIFT, stop descending until it is nulled — what a pilot does
+  // ("hold it, kill the drift, then let it down") rather than carrying drift
+  // into a flare that has no lean authority left to remove it.
+  ARREST_ALTITUDE: 16, // m above the footpads
+  ARREST_DRIFT: 1.0, // m/s
+  // Below this, arresting drift climbs gently instead of just holding: a
+  // lean near the ground swings the downhill footpad into the surface
+  // (half the 9.4 m gear span times sin(tilt) is 1.5 m at 18 degrees).
+  ARREST_CLIMB_BELOW: 5, // m above the footpads
+  ARREST_CLIMB_RATE: 0.8, // m/s
+
+  // Within this distance of a moving deck, "stopped" means matching the deck.
+  DECK_MATCH_RANGE: 60, // m
+};
+
 // RCS propellant is a small separate budget from the descent tanks.
 export const RCS_PROPELLANT = 60; // kg
 export const RCS_FLOW_PER_AXIS = 0.32; // kg/s while a translation/attitude jet fires

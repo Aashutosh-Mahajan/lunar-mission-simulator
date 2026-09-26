@@ -1,4 +1,5 @@
 import { LOCAL_STORAGE_LEADERBOARD_KEY, LOCAL_STORAGE_UNLOCKED_KEY } from "../constants.js";
+import { DIFFICULTY_ORDER, getDifficulty } from "../levels/difficulty.js";
 
 // Local-storage progress and personal bests. No accounts, no backend — per the
 // project constraints, everything stays on the machine.
@@ -21,6 +22,29 @@ function writeJson(key, value) {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Records are ranked by difficulty first, then score: a landing flown by hand
+// on Commander always outranks one the autopilot flew on Cadet, however the
+// scores compare. Records written before difficulty existed were flown under
+// what is now Commander, so that is what they count as.
+// ---------------------------------------------------------------------------
+
+/** 'bronze' | 'silver' | 'gold' for the difficulty an entry was flown on. */
+export const MEDALS = { cadet: "bronze", pilot: "silver", commander: "gold" };
+
+export function recordDifficulty(entry) {
+  return entry ? getDifficulty(entry.difficulty ?? "commander").id : null;
+}
+
+function rank(entry) {
+  if (!entry) return -1;
+  return DIFFICULTY_ORDER.indexOf(recordDifficulty(entry)) * 1000 + (entry.score ?? 0);
+}
+
+export function medalFor(entry) {
+  return entry ? MEDALS[recordDifficulty(entry)] : null;
+}
+
 export function getBest(levelId) {
   const board = readJson(LOCAL_STORAGE_LEADERBOARD_KEY, {});
   return board[levelId] ?? null;
@@ -35,7 +59,7 @@ export function getAllBests() {
  * toward the personal best and unlock the next site.
  * @returns {{ best: object|null, improved: boolean }}
  */
-export function recordResult(levelId, outcome, stats) {
+export function recordResult(levelId, outcome, stats, difficulty = "commander") {
   if (outcome !== "landed") return { best: getBest(levelId), improved: false };
 
   const board = readJson(LOCAL_STORAGE_LEADERBOARD_KEY, {});
@@ -48,10 +72,11 @@ export function recordResult(levelId, outcome, stats) {
     verticalSpeed: Math.round(stats.verticalSpeed * 100) / 100,
     horizontalSpeed: Math.round(stats.horizontalSpeed * 100) / 100,
     time: Math.round(stats.time * 10) / 10,
+    difficulty: getDifficulty(difficulty).id,
     date: new Date().toISOString(),
   };
 
-  const improved = !existing || entry.score > existing.score;
+  const improved = rank(entry) > rank(existing);
   if (improved) {
     board[levelId] = entry;
     writeJson(LOCAL_STORAGE_LEADERBOARD_KEY, board);
@@ -99,7 +124,7 @@ export function getAscentBest() {
 }
 
 /** Only a successful orbit insertion sets a record. */
-export function recordAscentResult(outcome, stats) {
+export function recordAscentResult(outcome, stats, difficulty = "commander") {
   if (outcome !== "orbit") return { best: getAscentBest(), improved: false };
 
   const board = readJson(LOCAL_STORAGE_LEADERBOARD_KEY, {});
@@ -111,10 +136,11 @@ export function recordAscentResult(outcome, stats) {
     propellantRemaining: Math.round(stats.propellantRemaining),
     maxQ: Math.round(stats.maxQ),
     missionTime: Math.round(stats.missionTime),
+    difficulty: getDifficulty(difficulty).id,
     date: new Date().toISOString(),
   };
 
-  const improved = !existing || entry.score > existing.score;
+  const improved = rank(entry) > rank(existing);
   if (improved) {
     board[ASCENT_KEY] = entry;
     writeJson(LOCAL_STORAGE_LEADERBOARD_KEY, board);
