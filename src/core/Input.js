@@ -10,8 +10,11 @@ const AXIS_KEYS = {
   // Attitude
   KeyW: ["pitch", +1],
   KeyS: ["pitch", -1],
-  KeyA: ["roll", +1],
-  KeyD: ["roll", -1],
+  // Roll is signed so that +1 moves the vehicle to the RIGHT as seen from the
+  // chase camera. It was previously the other way round, so A drifted the
+  // lander right and D drifted it left — the controls fought the player.
+  KeyA: ["roll", -1],
+  KeyD: ["roll", +1],
   KeyQ: ["yaw", +1],
   KeyE: ["yaw", -1],
   // RCS translation
@@ -30,6 +33,7 @@ const ACTION_KEYS = {
   KeyC: "cameraNext",
   KeyV: "cameraPrev",
   KeyT: "toggleStabiliser",
+  KeyG: "rateHold",
   KeyZ: "throttleFull",
   KeyX: "throttleCut",
   KeyR: "restart",
@@ -220,7 +224,7 @@ export default class Input {
 
     // Left stick: pitch/roll. Right stick X: yaw.
     c.pitch += -dz(pad.axes[1] ?? 0);
-    c.roll += -dz(pad.axes[0] ?? 0);
+    c.roll += dz(pad.axes[0] ?? 0); // stick right = move right, matching D
     c.yaw += -dz(pad.axes[2] ?? 0);
 
     // Right trigger is the main engine; left/right bumpers trim throttle.
