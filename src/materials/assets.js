@@ -1,4 +1,5 @@
 import * as THREE from "three";
+import { applyLunarPhotometry } from "./photometry.js";
 import * as CANNON from "cannon-es";
 import {
   buildRegolithMaps,
@@ -80,6 +81,8 @@ export async function buildAssets(onProgress = () => {}) {
     normalScale: new THREE.Vector2(0.85, 0.85),
     dithering: true,
   });
+  // Regolith scatters like regolith, not like matte paint — see photometry.js.
+  applyLunarPhotometry(assets.regolithMaterial);
 
   assets.boulderMaterial = new THREE.MeshStandardMaterial({
     map: assets.regolith.map,
@@ -89,6 +92,8 @@ export async function buildAssets(onProgress = () => {}) {
     metalness: 0,
     flatShading: true,
   });
+  // Weaker on boulders: their faceting is what makes them read as rock.
+  applyLunarPhotometry(assets.boulderMaterial, 0.4);
 
   // --- Spacecraft ------------------------------------------------------
   // Multi-layer insulation is crinkled Kapton, not a mirror — it scatters
@@ -99,9 +104,12 @@ export async function buildAssets(onProgress = () => {}) {
     normalMap: assets.foil.normalMap,
     roughnessMap: assets.foil.roughnessMap,
     color: 0xdcb478,
-    metalness: 0.55,
-    roughness: 0.56,
-    normalScale: new THREE.Vector2(1.6, 1.6),
+    metalness: 0.5,
+    roughness: 0.64,
+    // A strong normal map on a semi-metal under a hard sun turns every crease
+    // into a sub-pixel specular spike, so at any distance the foil glittered
+    // like sequins. At 0.9 the crinkle still reads and the sparkle is gone.
+    normalScale: new THREE.Vector2(0.9, 0.9),
   });
 
   assets.foilDarkMaterial = new THREE.MeshStandardMaterial({
@@ -109,9 +117,9 @@ export async function buildAssets(onProgress = () => {}) {
     normalMap: assets.foilDark.normalMap,
     roughnessMap: assets.foilDark.roughnessMap,
     color: 0x6a6259,
-    metalness: 0.55,
-    roughness: 0.6,
-    normalScale: new THREE.Vector2(1.4, 1.4),
+    metalness: 0.5,
+    roughness: 0.66,
+    normalScale: new THREE.Vector2(0.8, 0.8),
   });
 
   assets.panelMaterial = new THREE.MeshStandardMaterial({

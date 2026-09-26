@@ -1,6 +1,7 @@
 import * as THREE from "three";
 import * as CANNON from "cannon-es";
 import { makeSimplex2, makeRng, fbm, ridged, clamp, smoothstep, lerp } from "../materials/noise.js";
+import { applyLunarPhotometry } from "../materials/photometry.js";
 
 // ---------------------------------------------------------------------------
 // Lunar terrain: a real 3D height field, generated from the level config and
@@ -471,43 +472,103 @@ export default class Terrain {
       map: this.assets.regolith.map,
       normalMap: this.assets.regolith.normalMap,
     });
+    applyLunarPhotometry(material);
     this.farField = new THREE.Mesh(geometry, material);
     this.farField.receiveShadow = false;
     this.group.add(this.farField);
 
-    // Distant mountain ring (an old basin rim) to break the flat skyline.
-    const ridge = new THREE.Group();
-    const peakCount = 46;
-    const ringR = size * 0.42;
-    const peakGeo = new THREE.ConeGeometry(1, 1, 5, 1);
-    const peakMat = new THREE.MeshStandardMaterial({
-      color: 0x555049,
+    // Distant mountain ring: an old basin rim breaking the skyline.
+    //
+    // Built as one continuous band rather than a ring of instanced cones. The
+    // cones were flat-shaded five-sided pyramids, and at a 10-degree sun their
+    // sunward facets lit up as bright uniform triangles against a dark
+    // foreground — the least lunar thing on screen. A single displaced mesh
+    // with smooth normals gives a real silhouette, and lets the low sun rake
+    // across its slopes the way it does across the near terrain.
+    this.horizonRidge = this._buildHorizonMassif(size);
+    this.group.add(this.horizonRidge);
+  }
+
+  /**
+   * A ring-shaped massif: angular resolution follows the skyline, radial
+   * resolution follows the cross-section (foothills, main crest, back slope).
+   * Heights come from ridged noise sampled on the ring itself, so the
+   * silhouette is seamless all the way round.
+   */
+  _buildHorizonMassif(fieldSize) {
+    const inner = fieldSize * 0.3;
+    const outer = fieldSize * 0.5;
+    const segA = 540; // around the ring
+    const segR = 30; // across it
+    const positions = new Float32Array((segA + 1) * (segR + 1) * 3);
+    const uvs = new Float32Array((segA + 1) * (segR + 1) * 2);
+    const indices = [];
+
+    // Skyline height and crest position vary slowly round the ring.
+    const skyline = (a) => {
+      const nx = Math.cos(a) * 3.2;
+      const nz = Math.sin(a) * 3.2;
+      const main = ridged(this.noiseB, nx, nz, 5);
+      const broad = fbm(this.noise, nx * 0.45 + 11, nz * 0.45 - 7, 3);
+      return {
+        height: 90 + main * main * 460 + broad * 70,
+        crest: 0.48 + fbm(this.noise, nx * 0.6 - 3, nz * 0.6 + 5, 2) * 0.16,
+      };
+    };
+
+    let v = 0;
+    for (let i = 0; i <= segA; i++) {
+      const a = (i / segA) * Math.PI * 2;
+      const ca = Math.cos(a);
+      const sa = Math.sin(a);
+      const { height, crest } = skyline(a);
+      for (let j = 0; j <= segR; j++) {
+        const u = j / segR;
+        const r = inner + (outer - inner) * u;
+        const x = ca * r;
+        const z = sa * r;
+        // Asymmetric cross-section: a long foothill apron facing the site,
+        // a steeper crest, then the back slope falling away.
+        const d = u - crest;
+        const profile = d < 0 ? Math.exp(-(d * d) / 0.045) : Math.exp(-(d * d) / 0.02);
+        const apron = 0.28 * Math.exp(-((u - crest + 0.26) ** 2) / 0.02);
+        // Ridged detail so the slopes carry gullies and spurs, not a smooth hump.
+        const detail = ridged(this.noise, x * 0.0026, z * 0.0026, 4) - 0.35;
+        const y = -70 + height * (profile + apron) * (0.85 + detail * 0.55);
+        positions[v * 3] = x;
+        positions[v * 3 + 1] = y;
+        positions[v * 3 + 2] = z;
+        uvs[v * 2] = (i / segA) * 90;
+        uvs[v * 2 + 1] = u * 6;
+        v++;
+      }
+    }
+    for (let i = 0; i < segA; i++) {
+      for (let j = 0; j < segR; j++) {
+        const a = i * (segR + 1) + j;
+        const b = a + segR + 1;
+        indices.push(a, a + 1, b, b, a + 1, b + 1);
+      }
+    }
+
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute("position", new THREE.BufferAttribute(positions, 3));
+    geometry.setAttribute("uv", new THREE.BufferAttribute(uvs, 2));
+    geometry.setIndex(indices);
+    geometry.computeVertexNormals();
+    geometry.computeBoundingSphere();
+
+    const material = new THREE.MeshStandardMaterial({
+      color: 0x6f6961,
       roughness: 1,
       metalness: 0,
-      flatShading: true,
+      map: this.assets.regolith.map,
     });
-    const peaks = new THREE.InstancedMesh(peakGeo, peakMat, peakCount);
-    const m = new THREE.Matrix4();
-    const q = new THREE.Quaternion();
-    const scale = new THREE.Vector3();
-    const posv = new THREE.Vector3();
-    for (let i = 0; i < peakCount; i++) {
-      const a = (i / peakCount) * Math.PI * 2 + this.rng() * 0.08;
-      const rr = ringR * (0.86 + this.rng() * 0.3);
-      // Kept low and broad: the lunar horizon is close, so distant relief
-      // should read as a subtle massif on the skyline, not a ring of peaks.
-      const height = 150 + this.rng() * 330;
-      const width = height * (2.2 + this.rng() * 1.8);
-      posv.set(Math.cos(a) * rr, height * 0.42 - 60, Math.sin(a) * rr);
-      scale.set(width, height, width);
-      q.setFromAxisAngle(new THREE.Vector3(0, 1, 0), this.rng() * Math.PI);
-      m.compose(posv, q, scale);
-      peaks.setMatrixAt(i, m);
-    }
-    peaks.instanceMatrix.needsUpdate = true;
-    ridge.add(peaks);
-    this.group.add(ridge);
-    this.horizonRidge = ridge;
+    applyLunarPhotometry(material);
+    const mesh = new THREE.Mesh(geometry, material);
+    mesh.receiveShadow = false;
+    mesh.castShadow = false;
+    return mesh;
   }
 
   // -------------------------------------------------------------------------

@@ -41,6 +41,8 @@ export default class CameraRig {
     this._smoothLook = new THREE.Vector3();
     this._shake = new THREE.Vector3();
     this._tmp = new THREE.Vector3();
+    this._toLander = new THREE.Vector3();
+    this._toPad = new THREE.Vector3();
     this._tmpQ = new THREE.Quaternion();
     this._lookEuler = new THREE.Euler();
     this._lookQuat = new THREE.Quaternion();
@@ -122,7 +124,7 @@ export default class CameraRig {
         this._updateOrbit(focus);
         break;
       default:
-        this._updateChase(focus, heading, s);
+        this._updateChase(focus, heading, s, terrain);
         break;
     }
 
@@ -200,7 +202,7 @@ export default class CameraRig {
     }
   }
 
-  _updateChase(focus, heading, s) {
+  _updateChase(focus, heading, s, terrain) {
     // Sits behind and above, pulling back and rising slightly with speed so
     // fast descents stay readable.
     const speed = s.velocity.length();
@@ -215,6 +217,39 @@ export default class CameraRig {
     // Lead the look-at point downward so the landing site stays in frame.
     this._lookAt.copy(focus).addScaledVector(s.velocity, 0.35);
     this._lookAt.y -= 3;
+
+    // Frame the pad as well as the vehicle. From behind and above, a pad that
+    // is ahead and far below sits at the very bottom of the frame — under the
+    // instrument cluster — exactly when the pilot most needs to see it. Aim
+    // part-way toward it, but never so far that the lander leaves the frame.
+    if (terrain?.padCenter) this._framePad(terrain.padCenter);
+  }
+
+  _framePad(pad) {
+    const toLander = this._toLander.subVectors(this._lookAt, this._desired);
+    const range = toLander.length();
+    if (range < 1e-3) return;
+    toLander.divideScalar(range);
+    const toPad = this._toPad.subVectors(pad, this._desired);
+    const padRange = toPad.length();
+    if (padRange < 1e-3) return;
+    toPad.divideScalar(padRange);
+
+    // Only when the pad is in front of the camera and within approach range.
+    const ahead = toLander.dot(toPad);
+    if (ahead <= 0.2) return;
+    const nearness = 1 - THREE.MathUtils.smoothstep(padRange, 350, 700);
+    if (nearness <= 0) return;
+
+    // Split the difference, capped so the lander stays inside ~40% of the
+    // half-field of view from centre.
+    const separation = Math.acos(THREE.MathUtils.clamp(ahead, -1, 1));
+    const halfFov = THREE.MathUtils.degToRad(FOV.chase) / 2;
+    const maxShift = halfFov * 0.62;
+    const blend = separation > 1e-4 ? Math.min(0.5, maxShift / separation) * nearness : 0;
+
+    toLander.lerp(toPad, blend).normalize();
+    this._lookAt.copy(this._desired).addScaledVector(toLander, range);
   }
 
   _updateOrbit(focus) {

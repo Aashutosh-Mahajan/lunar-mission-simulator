@@ -74,7 +74,12 @@ export default class CoastCamera {
    * @param {number} elapsed
    */
   update(dt, craft, space, elapsed) {
-    const centre = this._centre.set(0, craft.height * 0.4, 0).add(craft.group.position);
+    // Middle of the stack, in the spacecraft's own frame. The craft is built
+    // along its local +Y but flown lying along world +Z, so adding a world-Y
+    // offset (as this used to) aimed every view at empty space beside the
+    // vehicle and left it jammed into a corner of the frame.
+    craft.group.updateMatrixWorld();
+    const centre = craft.group.localToWorld(this._centre.set(0, craft.height * 0.45, 0));
 
     // A very slow drift keeps the shot alive during the long quiet stretches,
     // but it hands over the moment the player takes the camera themselves —
