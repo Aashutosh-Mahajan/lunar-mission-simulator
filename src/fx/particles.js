@@ -116,18 +116,39 @@ class Pool {
   }
 }
 
+// Point sprites are sized in world metres. Converting that to pixels needs
+// the projection's focal length (projectionMatrix[1][1] = 1 / tan(fov/2)) and
+// the drawing-buffer height. The old fixed "620 / depth" ignored both, so
+// under a telephoto lens (the launch tracker narrows to a few degrees) every
+// exhaust particle rendered an order of magnitude too small against the
+// vehicle, and on high-resolution screens all particles were undersized.
 const particleVertex = /* glsl */ `
   attribute float alpha;
   attribute float psize;
+  uniform float pointScale;   // drawing-buffer height / 2, in pixels
+  uniform float maxPointSize; // hardware limit
   varying float vAlpha;
   void main() {
     vAlpha = alpha;
     vec4 mv = modelViewMatrix * vec4(position, 1.0);
     gl_Position = projectionMatrix * mv;
-    // Perspective size attenuation, clamped so near particles stay sane.
-    gl_PointSize = clamp(psize * 620.0 / max(-mv.z, 1.0), 1.0, 260.0);
+    float px = psize * projectionMatrix[1][1] * pointScale / max(-mv.z, 1.0);
+    gl_PointSize = clamp(px, 1.0, maxPointSize);
   }
 `;
+
+// Scratch vectors for the emitters (no per-particle allocation).
+const DOWN = new THREE.Vector3(0, -1, 0);
+const _perp1 = new THREE.Vector3();
+const _perp2 = new THREE.Vector3();
+const _off = new THREE.Vector3();
+
+// Exhaust smoke is brought to rest by the surrounding air within seconds.
+const SMOKE_DRAG = 0.9; // 1/s
+
+// Shared by every particle material, updated once on resize.
+const POINT_SCALE = { value: 400 };
+const MAX_POINT_SIZE = { value: 256 };
 
 const particleFragment = /* glsl */ `
   uniform sampler2D map;
@@ -148,6 +169,8 @@ function makeParticleMaterial(map, tint, { additive = false, opacity = 1 } = {})
       map: { value: map },
       tint: { value: new THREE.Color(tint) },
       opacity: { value: opacity },
+      pointScale: POINT_SCALE,
+      maxPointSize: MAX_POINT_SIZE,
     },
     vertexShader: particleVertex,
     fragmentShader: particleFragment,
@@ -173,8 +196,12 @@ export default class ParticleSystem {
     this.plume = new Pool(scene, 500, makeParticleMaterial(assets.glowSprite, 0xffb070, { additive: true, opacity: 0.32 }));
     this.sparks = new Pool(scene, 700, makeParticleMaterial(assets.glowSprite, 0xffd9a0, { additive: true, opacity: 0.9 }));
     this.debris = new Pool(scene, 400, makeParticleMaterial(assets.dustSprite, 0x8a8580, { opacity: 0.95 }));
+    // Launch exhaust trail. Only ever used on Earth: it has drag and expands,
+    // where everything else here is ballistic in vacuum.
+    this.smoke = new Pool(scene, 1600, makeParticleMaterial(assets.dustSprite, 0xe9e4da, { opacity: 0.34 }));
+    this._smokeGrowth = new Float32Array(this.smoke.capacity);
 
-    this.pools = [this.dust, this.plume, this.sparks, this.debris];
+    this.pools = [this.dust, this.plume, this.sparks, this.debris, this.smoke];
 
     this._buildPlumeCone();
 
@@ -183,6 +210,22 @@ export default class ParticleSystem {
 
   setTerrain(terrain) {
     this.terrain = terrain;
+  }
+
+  /**
+   * Keeps sprite sizes in world units whatever the resolution. Call after
+   * the renderer is resized or its pixel ratio / render scale changes.
+   * @param {THREE.WebGLRenderer} renderer
+   */
+  setViewport(renderer) {
+    const size = renderer.getDrawingBufferSize(this._bufferSize ?? (this._bufferSize = new THREE.Vector2()));
+    POINT_SCALE.value = size.y * 0.5;
+    if (!this._pointLimit) {
+      const gl = renderer.getContext();
+      const range = gl.getParameter(gl.ALIASED_POINT_SIZE_RANGE);
+      this._pointLimit = Math.min(range?.[1] ?? 256, 512);
+    }
+    MAX_POINT_SIZE.value = this._pointLimit;
   }
 
   setQuality(scale) {
@@ -195,7 +238,8 @@ export default class ParticleSystem {
    * very wide, unlike an atmospheric rocket flame.
    */
   _buildPlumeCone() {
-    const geometry = new THREE.ConeGeometry(1, 1, 28, 6, true);
+    // Starts at the nozzle-exit width rather than a point, widening downstream.
+    const geometry = new THREE.CylinderGeometry(0.3, 1, 1, 28, 8, true);
     geometry.translate(0, -0.5, 0); // origin at the nozzle exit
     this.plumeMaterial = new THREE.ShaderMaterial({
       uniforms: {
@@ -230,17 +274,19 @@ export default class ParticleSystem {
         }
 
         void main() {
-          // Fades out along the plume as it expands and rarefies.
+          // 0 at the nozzle, 1 at the open far end. (Previously inverted:
+          // densest at the far end, which drew a hollow glowing rim below
+          // the lander instead of a plume leaving the nozzle.)
           float along = 1.0 - vUv.y;
-          float density = pow(along, 1.7);
-          // Rim-lit: we see more gas looking through the cone edge-on.
-          float rim = 1.0 - abs(dot(vNormal, vView));
-          rim = pow(clamp(rim, 0.0, 1.0), 1.4);
-          // Shock structure ripples travelling down the plume.
-          float ripple = 0.75 + 0.25 * sin(vUv.y * 34.0 - time * 26.0);
-          float flicker = 0.86 + 0.14 * hash(vec2(floor(time * 45.0), floor(vUv.y * 8.0)));
+          float density = pow(1.0 - along, 1.6) * smoothstep(1.0, 0.7, along);
+          // Optically thin gas: brightest through the middle, where the line
+          // of sight crosses the most of it.
+          float body = mix(0.3, 1.0, abs(dot(vNormal, vView)));
+          // Faint standing shock structure.
+          float ripple = 0.82 + 0.18 * sin(vUv.y * 34.0);
+          float flicker = 0.88 + 0.12 * hash(vec2(floor(time * 45.0), floor(vUv.y * 8.0)));
 
-          float a = density * rim * ripple * flicker * throttle * 0.34;
+          float a = density * body * ripple * flicker * throttle * 0.3;
           vec3 col = mix(edgeColor, coreColor, density);
           gl_FragColor = vec4(col, a);
         }
@@ -276,23 +322,33 @@ export default class ParticleSystem {
     // The cone's apex sits at its local origin and it opens along local -Y
     // (see _buildPlumeCone), so -Y is the axis that must align with the
     // exhaust direction.
-    this.plumeCone.quaternion.setFromUnitVectors(new THREE.Vector3(0, -1, 0), direction);
+    this.plumeCone.quaternion.setFromUnitVectors(DOWN, direction);
     this.plumeCone.scale.set(radius, length, radius);
     this.plumeMaterial.uniforms.throttle.value = throttle;
     this.plumeMaterial.uniforms.time.value = elapsed;
 
-    // A few glow particles streaming down the plume axis.
+    // A few glow particles streaming down the plume axis. Emission is scaled
+    // by the real frame time (derived from the mission clock), not an assumed
+    // 60 fps, so the plume looks the same on a 30 Hz laptop and a 144 Hz
+    // monitor.
+    const dt = THREE.MathUtils.clamp(elapsed - (this._lastPlumeTime ?? elapsed), 0, 0.1);
+    this._lastPlumeTime = elapsed;
     const rate = 34 * throttle * this.quality;
-    this._acc.plume += rate * (1 / 60);
+    this._acc.plume += rate * dt;
+
+    // Basis across the plume axis, computed once rather than per particle.
+    const perp1 = _perp1.set(1, 0, 0).cross(direction);
+    if (perp1.lengthSq() < 1e-6) perp1.set(0, 0, 1).cross(direction);
+    perp1.normalize();
+    const perp2 = _perp2.crossVectors(direction, perp1);
+    const off = _off;
+
     while (this._acc.plume >= 1) {
       this._acc.plume -= 1;
       const spread = 0.5 + Math.random() * radius * 0.4;
       const a = Math.random() * Math.PI * 2;
       const speed = 18 + Math.random() * 26;
-      const perp1 = new THREE.Vector3(1, 0, 0).cross(direction).normalize();
-      const perp2 = new THREE.Vector3().crossVectors(direction, perp1);
-      const off = perp1
-        .clone()
+      off.copy(perp1)
         .multiplyScalar(Math.cos(a) * spread)
         .addScaledVector(perp2, Math.sin(a) * spread);
       this.plume.spawn(
@@ -440,6 +496,10 @@ export default class ParticleSystem {
     const terrain = this.terrain;
 
     for (const pool of this.pools) {
+      if (pool === this.smoke) {
+        this._updateSmoke(dt);
+        continue;
+      }
       const isSpark = pool === this.sparks;
       const isPlume = pool === this.plume;
       for (let i = pool.count - 1; i >= 0; i--) {
@@ -476,6 +536,42 @@ export default class ParticleSystem {
       }
       pool.flush();
     }
+  }
+
+  /**
+   * Exhaust smoke: slowed by drag toward the surrounding air and expanding as
+   * it mixes, which is why a launch trail widens into a column rather than
+   * staying a pencil line. The growth rate is kept in a side array that
+   * travels with each particle when the pool compacts.
+   */
+  emitSmoke(x, y, z, vx, vy, vz, life, size, growth) {
+    const pool = this.smoke;
+    const slot = pool.count < pool.capacity ? pool.count : 0;
+    pool.spawn(x, y, z, vx, vy, vz, life, size);
+    this._smokeGrowth[slot] = growth;
+  }
+
+  _updateSmoke(dt) {
+    const pool = this.smoke;
+    const growth = this._smokeGrowth;
+    const drag = Math.exp(-SMOKE_DRAG * dt);
+    for (let i = pool.count - 1; i >= 0; i--) {
+      pool.life[i] -= dt;
+      if (pool.life[i] <= 0) {
+        const last = pool.count - 1;
+        growth[i] = growth[last];
+        pool._remove(i);
+        continue;
+      }
+      pool.vx[i] *= drag;
+      pool.vy[i] *= drag;
+      pool.vz[i] *= drag;
+      pool.px[i] += pool.vx[i] * dt;
+      pool.py[i] += pool.vy[i] * dt;
+      pool.pz[i] += pool.vz[i] * dt;
+      pool.size[i] += growth[i] * dt;
+    }
+    pool.flush();
   }
 
   reset() {

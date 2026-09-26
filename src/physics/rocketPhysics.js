@@ -46,6 +46,9 @@ const SPEED_OF_SOUND = 340; // m/s
 // vehicle cannot snap its attitude around; this is the gimbal response.
 const PITCH_TRACKING_RATE = 1.6; // 1/s
 
+// How fast W/S (or the autopilot) move the pitch bias, degrees per second.
+const BIAS_RATE = 22;
+
 const _thrustDir = new THREE.Vector3();
 const _dragDir = new THREE.Vector3();
 const _accel = new THREE.Vector3();
@@ -203,7 +206,15 @@ export function stepRocketPhysics(state, controls, dt, mission = ASCENT_MISSION)
   // Attitude: scripted gravity turn plus the player's bias
   // -----------------------------------------------------------------------
   const authority = mission.pitchAuthority;
-  state.pitchBias += (controls.pitchUp - controls.pitchDown) * 22 * dt;
+  const manualPitch = controls.pitchUp - controls.pitchDown;
+  if (Math.abs(manualPitch) < 1e-3 && controls.autoBias !== undefined) {
+    // Autopilot: move the bias toward the flight director's value at the same
+    // rate a held key would. The player always overrides by pressing W/S.
+    const step = BIAS_RATE * dt;
+    state.pitchBias += THREE.MathUtils.clamp(controls.autoBias - state.pitchBias, -step, step);
+  } else {
+    state.pitchBias += manualPitch * BIAS_RATE * dt;
+  }
   state.pitchBias = THREE.MathUtils.clamp(state.pitchBias, -authority, authority);
 
   // The program is keyed on the highest altitude reached, not the current

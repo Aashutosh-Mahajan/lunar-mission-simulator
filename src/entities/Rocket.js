@@ -50,20 +50,25 @@ export default class Rocket {
 
     // Saturn V's insulation was painted white with black roll-pattern
     // markings so range cameras could measure roll rate.
+    //
+    // Paint, not bare metal: a dielectric (metalness 0) with a smooth satin
+    // finish. It previously took the LM's grey, mottled panel texture as its
+    // colour map and a fair amount of metalness, which rendered the stack as
+    // dirty grey aluminium. The panel normal map is kept, faintly, for the
+    // stringers and weld lines that real footage shows under the paint.
     this.white = new THREE.MeshStandardMaterial({
-      color: 0xe9e9e6,
-      metalness: 0.18,
-      roughness: 0.62,
-      map: a.panel.map,
+      color: 0xf2f1ec,
+      metalness: 0,
+      roughness: 0.46,
       normalMap: a.panel.normalMap,
-      roughnessMap: a.panel.roughnessMap,
+      normalScale: new THREE.Vector2(0.35, 0.35),
     });
     this.black = new THREE.MeshStandardMaterial({
-      color: 0x24262a,
-      metalness: 0.2,
-      roughness: 0.66,
-      map: a.panel.map,
+      color: 0x1d1f22,
+      metalness: 0,
+      roughness: 0.5,
       normalMap: a.panel.normalMap,
+      normalScale: new THREE.Vector2(0.35, 0.35),
     });
     this.metal = new THREE.MeshStandardMaterial({
       color: 0xa8adb2,
@@ -299,7 +304,10 @@ export default class Rocket {
    * high-altitude Saturn V footage so recognisable.
    */
   _buildPlumes() {
-    const geo = new THREE.ConeGeometry(1, 1, 26, 6, true);
+    // Starts at the width of the engine cluster rather than at a point, and
+    // widens downstream. Open-ended, so the shader must fade to nothing before
+    // the far rim or that rim shows as a hard edge.
+    const geo = new THREE.CylinderGeometry(0.55, 1, 1, 32, 14, true);
     geo.translate(0, -0.5, 0);
 
     this.plumeMaterial = new THREE.ShaderMaterial({
@@ -307,6 +315,7 @@ export default class Rocket {
         throttle: { value: 0 },
         time: { value: 0 },
         expansion: { value: 0 }, // 0 = sea level, 1 = vacuum
+        luminosity: { value: 1 }, // kerosene flame 1, hydrogen far less
         coreColor: { value: new THREE.Color(0xfff0d0) },
         midColor: { value: new THREE.Color(0xff9540) },
         edgeColor: { value: new THREE.Color(0xff5a20) },
@@ -327,6 +336,7 @@ export default class Rocket {
         uniform float throttle;
         uniform float time;
         uniform float expansion;
+        uniform float luminosity;
         uniform vec3 coreColor;
         uniform vec3 midColor;
         uniform vec3 edgeColor;
@@ -341,25 +351,38 @@ export default class Rocket {
         }
 
         void main() {
+          // 0 at the nozzle exit, 1 at the far (open) end. CylinderGeometry
+          // puts v = 1 at the top, which is the nozzle end here. (This was
+          // previously inverted, so the plume was brightest at its open far
+          // end and drew a hollow glowing ring trailing below the vehicle.)
           float along = 1.0 - vUv.y;
-          // Sea level: dense and bright near the nozzle, fading fast.
-          // Vacuum: thin, wide, and translucent all the way down.
-          float density = mix(pow(along, 3.2), pow(along, 0.85), expansion);
+          float near = 1.0 - along;
+          // Sea level: dense and bright at the nozzle, fading fast.
+          // Vacuum: thin, wide, and translucent a long way downstream.
+          float density = mix(pow(near, 2.4), pow(near, 0.9), expansion);
+          // Always reach zero before the open end: no rim.
+          density *= smoothstep(1.0, 0.72, along);
 
-          float rim = 1.0 - abs(dot(vNormal, vView));
-          rim = pow(clamp(rim, 0.0, 1.0), mix(0.6, 1.5, expansion));
+          // Optically thin gas glows in proportion to the path length through
+          // it, which is longest through the centre and shortest at the
+          // silhouette — so brighter in the middle, softer at the edges.
+          // Falls all the way to zero at the silhouette, so the plume has a
+          // soft boundary instead of the hard edge of the mesh behind it.
+          float thickness = abs(dot(vNormal, vView));
+          float body = pow(thickness, 0.9);
 
-          // Mach diamonds: standing shocks visible only in the atmosphere.
-          float diamonds = 0.75 + 0.25 * sin(vUv.y * 46.0 - time * 30.0);
+          // Mach diamonds: standing shocks, visible only in the atmosphere.
+          // Standing — they do not travel down the plume.
+          float diamonds = 0.78 + 0.22 * sin(vUv.y * 46.0);
           diamonds = mix(diamonds, 1.0, expansion);
 
-          float flicker = 0.88 + 0.12 * hash(vec2(floor(time * 60.0), floor(vUv.y * 12.0)));
+          float flicker = 0.9 + 0.1 * hash(vec2(floor(time * 60.0), floor(vUv.y * 12.0)));
 
           // Overall level is kept well under 1: this is drawn additively over
           // a large part of the frame, and a fully opaque plume turns the
           // whole scene orange.
-          float alpha = density * mix(1.0, rim, expansion * 0.85) * diamonds * flicker;
-          alpha *= throttle * mix(0.5, 0.42, expansion);
+          float alpha = density * body * diamonds * flicker;
+          alpha *= throttle * mix(0.55, 0.3, expansion) * luminosity;
 
           vec3 col = mix(edgeColor, midColor, density);
           col = mix(col, coreColor, pow(density, 2.0));
@@ -517,11 +540,13 @@ export default class Rocket {
     this.plume.visible = visible;
     // Enough to warm the pad structure and the exhaust cloud without
     // flooding the whole frame.
-    this.engineLight.intensity = visible ? throttle * 7000 : 0;
+    const stage = this.mission.stages[stageIndex];
+    // A hydrogen flame throws a fraction of the light a kerosene one does.
+    const glow = stage?.fuel === "hydrolox" ? 0.15 : 1;
+    this.engineLight.intensity = visible ? throttle * 7000 * glow : 0;
     if (!visible) return;
 
     const expansion = 1 - pressureRatio;
-    const stage = this.mission.stages[stageIndex];
 
     // Sea-level plumes are roughly a vehicle-diameter wide and a few
     // diameters long; in vacuum they bloom to many times that.
@@ -529,7 +554,7 @@ export default class Rocket {
     const radius = baseRadius * (0.85 + expansion * 2.6);
     // Long enough to read as a vacuum plume, short enough that the chase
     // camera doesn't end up inside it.
-    const length = stage.diameter * (2.2 + expansion * 4.5) * (0.5 + throttle * 0.7);
+    const length = stage.diameter * (3.4 + expansion * 4.5) * (0.5 + throttle * 0.7);
 
     // Position the plume at the base of the currently burning stage.
     let offset = 0;
@@ -543,6 +568,34 @@ export default class Rocket {
     this.plumeMaterial.uniforms.throttle.value = throttle;
     this.plumeMaterial.uniforms.time.value = elapsed;
     this.plumeMaterial.uniforms.expansion.value = expansion;
+    this._setPlumeFuel(stage.fuel);
+  }
+
+  /**
+   * Kerosene and hydrogen burn very differently to the eye. The S-IC's RP-1
+   * flame is full of glowing soot and is the brilliant orange plume everyone
+   * pictures; the J-2s on the S-II and S-IVB burned hydrogen, whose exhaust is
+   * nearly transparent — a faint blue-violet shimmer. Rendering the upper
+   * stages with the first stage's flame made the vacuum plume a solid white
+   * tube filling the screen.
+   */
+  _setPlumeFuel(fuel) {
+    if (fuel === this._plumeFuel) return;
+    this._plumeFuel = fuel;
+    const u = this.plumeMaterial.uniforms;
+    if (fuel === "hydrolox") {
+      u.luminosity.value = 0.16;
+      u.coreColor.value.set(0xe4ecff);
+      u.midColor.value.set(0x9fb6ff);
+      u.edgeColor.value.set(0x6a70d8);
+      this.engineLight.color.set(0xb8c6ff);
+    } else {
+      u.luminosity.value = 1;
+      u.coreColor.value.set(0xfff0d0);
+      u.midColor.value.set(0xff9540);
+      u.edgeColor.value.set(0xff5a20);
+      this.engineLight.color.set(0xffa860);
+    }
   }
 
   dispose() {

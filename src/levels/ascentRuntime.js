@@ -12,7 +12,8 @@ import {
   activeStage,
   gravityAtAltitude,
 } from "../physics/rocketPhysics.js";
-import { ASCENT_MISSION, pressureRatio } from "./ascentConfig.js";
+import { ASCENT_MISSION, pressureRatio, programmedPitch } from "./ascentConfig.js";
+import { applyAscentDifficulty, DEFAULT_DIFFICULTY } from "./difficulty.js";
 
 // ---------------------------------------------------------------------------
 // Phase 2 runtime: owns one launch attempt.
@@ -24,13 +25,32 @@ import { ASCENT_MISSION, pressureRatio } from "./ascentConfig.js";
 
 const MAX_MISSION_TIME = 1500; // s — a hard stop so a stuck flight ends
 
+// Exhaust trail tuning. Below TRAIL_MIN_PRESSURE (roughly 35 km) there is too
+// little air for a visible trail.
+const TRAIL_MIN_PRESSURE = 0.015;
+const TRAIL_SPACING = 7; // m of flight path per puff
+const TRAIL_MAX_PER_FRAME = 36;
+
+// Delay between burnout and automatic staging, mission seconds. The real
+// sequence ran about this long between cutoff and next-stage ignition.
+const AUTO_STAGE_DELAY = 1.2;
+
 export default class AscentRuntime {
-  constructor({ scene, particles, assets, audio }) {
+  constructor({ scene, particles, assets, audio, difficulty = DEFAULT_DIFFICULTY }) {
     this.scene = scene;
     this.particles = particles;
     this.assets = assets;
     this.audio = audio;
-    this.mission = ASCENT_MISSION;
+    // Wider windows and margins at the easier settings; same vehicle.
+    this.mission = applyAscentDifficulty(ASCENT_MISSION, difficulty);
+    this.assists = this.mission.assists;
+    // The flight director's current recommendation, degrees of pitch bias,
+    // or null while it is not engaged. Shown on the HUD at every setting.
+    this.guidanceBias = null;
+    this._stageTimer = 0;
+    this._trailNozzle = new THREE.Vector3();
+    this._trailLast = new THREE.Vector3();
+    this._trailPrimed = false;
 
     this.state = createAscentState(this.mission);
     this.result = null;
@@ -115,8 +135,12 @@ export default class AscentRuntime {
         this.telemetry = stepRocketPhysics(this.state, this._holdControls(), dt, this.mission);
       }
     } else if (this.status === "flying") {
+      this.guidanceBias = this._flightDirector();
+      const flown = this.assists.autoGuidance && this.guidanceBias !== null
+        ? { ...controls, autoBias: this.guidanceBias }
+        : controls;
       for (let i = 0; i < substeps; i++) {
-        this.telemetry = stepRocketPhysics(this.state, controls, dt, this.mission);
+        this.telemetry = stepRocketPhysics(this.state, flown, dt, this.mission);
         const failure = checkLimits(this.state, this.telemetry, this.mission);
         if (failure) {
           this._fail(failure);
@@ -128,6 +152,7 @@ export default class AscentRuntime {
         }
       }
       this._trackMilestones();
+      this._runAssists(scaled);
     }
 
     this._maxQ = Math.max(this._maxQ, this.telemetry.dynamicPressure);
@@ -138,6 +163,65 @@ export default class AscentRuntime {
     this._syncVehicle();
     this._updateEffects(rawDt, scaled, controls);
     return this.telemetry;
+  }
+
+  /**
+   * Recommended pitch bias, or null below the engage altitude. See the
+   * guidance block in ascentConfig.js for the law.
+   */
+  _flightDirector() {
+    const t = this.telemetry;
+    const g = this.mission.guidance;
+    const limits = this.mission.limits;
+    if (t.altitude < g.engageAltitude || t.dynamicPressure > limits.angleOfAttackQThreshold) {
+      return null;
+    }
+    const thrustAccel = t.mass > 0 ? t.thrust / t.mass : 0;
+    // Engine out between stages: hold whatever bias is set.
+    if (thrustAccel < 1) return this.state.pitchBias;
+
+    const climb = THREE.MathUtils.clamp(
+      (this.mission.orbit.targetAltitude - t.altitude) * g.altitudeGain,
+      g.minClimb,
+      g.maxClimb
+    );
+    const ay = (climb - t.verticalSpeed) * g.rateGain + t.effectiveGravity;
+    const sinPitch = THREE.MathUtils.clamp(ay / thrustAccel, -0.35, 0.97);
+    const pitch = THREE.MathUtils.radToDeg(Math.asin(sinPitch));
+    const bias = pitch - programmedPitch(this.state.programAltitude);
+    const a = this.mission.pitchAuthority;
+    return THREE.MathUtils.clamp(bias, -a, a);
+  }
+
+  /** Automatic staging and cut-off, where the difficulty provides them. */
+  _runAssists(missionDt) {
+    if (this.status !== "flying") return;
+    const s = this.state;
+    const stage = activeStage(s);
+
+    if (this.assists.autoStage && stage && stage.propellant <= 0 && s.stageIndex < s.stages.length - 1) {
+      this._stageTimer += missionDt;
+      if (this._stageTimer >= AUTO_STAGE_DELAY) {
+        this._stageTimer = 0;
+        this.stage();
+      }
+    } else {
+      this._stageTimer = 0;
+    }
+
+    // Insertion is only ever attempted on the last stage.
+    if (!this.assists.autoInsert || s.stageIndex < s.stages.length - 1) return;
+    const evaluation = evaluateInsertion(this.telemetry, this.mission);
+    if (!evaluation.passed) return;
+    const target = this.mission.orbit.targetSpeed - this.mission.guidance.cutoffMargin;
+    const dry = !stage || stage.propellant <= 0;
+    if (this.telemetry.horizontalSpeed >= target || dry) this.attemptInsertion();
+  }
+
+  /** True while the flight is inside every insertion band — for HUD cues. */
+  get inWindow() {
+    if (this.status !== "flying") return false;
+    return evaluateInsertion(this.telemetry, this.mission).passed;
   }
 
   _holdControls() {
@@ -413,6 +497,61 @@ export default class AscentRuntime {
       const intensity = this.state.throttle * (1 - t.altitude / 400);
       this._emitPadExhaust(intensity, dt);
     }
+
+    this._emitExhaustTrail(p);
+  }
+
+  /**
+   * The exhaust trail: the long white column that is the most recognisable
+   * thing in launch footage. Dense low down, thinning with the air, gone by
+   * the upper stratosphere. Emitted by distance travelled rather than per
+   * frame, and interpolated along the path, so time warp leaves no gaps.
+   */
+  _emitExhaustTrail(pressure) {
+    const s = this.state;
+    const nozzle = this._trailNozzle.copy(this.vehicleWorldPosition);
+    const last = this._trailLast;
+    const active = s.engineOn && s.liftedOff && pressure > TRAIL_MIN_PRESSURE && this.telemetry.altitude > 60;
+    if (!active) {
+      this._trailPrimed = false;
+      return;
+    }
+    if (!this._trailPrimed) {
+      last.copy(nozzle);
+      this._trailPrimed = true;
+      return;
+    }
+
+    const travelled = nozzle.distanceTo(last);
+    const count = Math.min(TRAIL_MAX_PER_FRAME, Math.floor(travelled / TRAIL_SPACING));
+    if (count <= 0) return;
+
+    // Thin air: the puffs start larger and spread faster, but there are fewer
+    // of them and they fade sooner.
+    const thin = 1 - pressure;
+    const density = Math.pow(pressure, 0.35) * s.throttle;
+    const v = s.velocity;
+    for (let i = 1; i <= count; i++) {
+      if (Math.random() > density) continue;
+      const k = i / count;
+      const x = last.x + (nozzle.x - last.x) * k;
+      const y = last.y + (nozzle.y - last.y) * k;
+      const z = last.z + (nozzle.z - last.z) * k;
+      const jitter = 5 + thin * 18;
+      this.particles.emitSmoke(
+        x + (Math.random() - 0.5) * jitter,
+        y + (Math.random() - 0.5) * jitter,
+        z + (Math.random() - 0.5) * jitter,
+        // A little of the vehicle's velocity, plus a spread.
+        v.x * 0.04 + (Math.random() - 0.5) * 10,
+        v.y * 0.04 + (Math.random() - 0.5) * 10,
+        (Math.random() - 0.5) * 10,
+        14 + Math.random() * 12 * (1 - thin * 0.5),
+        12 + thin * 30 + Math.random() * 6,
+        3.5 + thin * 7
+      );
+    }
+    last.copy(nozzle);
   }
 
   /**

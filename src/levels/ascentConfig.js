@@ -48,6 +48,8 @@ export const ASCENT_MISSION = {
       length: 42.1, // m
       diameter: 10.1, // m
       separationImpulse: 14, // m/s of visual separation drift
+      // RP-1 (kerosene) and LOX: soot-laden, so the flame is brilliant orange.
+      fuel: "kerolox",
     },
     {
       name: "S-II",
@@ -62,6 +64,9 @@ export const ASCENT_MISSION = {
       length: 24.9,
       diameter: 10.1,
       separationImpulse: 9,
+      // Liquid hydrogen and LOX: the exhaust is mostly water vapour and burns
+      // almost invisibly — a faint bluish haze, not a flame.
+      fuel: "hydrolox",
     },
     {
       name: "S-IVB",
@@ -76,6 +81,7 @@ export const ASCENT_MISSION = {
       length: 17.8,
       diameter: 6.6,
       separationImpulse: 0,
+      fuel: "hydrolox",
     },
   ],
 
@@ -123,6 +129,27 @@ export const ASCENT_MISSION = {
   // enough to flatten the climb out near insertion, which is the manoeuvre
   // the last two minutes of the flight are about.
   pitchAuthority: 24,
+
+  // -------------------------------------------------------------------------
+  // Flight director. Recommends a pitch bias, inside the same ±pitchAuthority
+  // the player has on W/S, that brings the vertical speed down to zero at the
+  // target altitude as horizontal speed builds. The Cadet setting flies it;
+  // the Pilot setting shows it as a cue. Only active once the air is thin
+  // enough that steering cannot break the vehicle.
+  //
+  //   vy*  = clamp((h_target - h) * altitudeGain, minClimb, maxClimb)
+  //   a_y  = (vy* - vy) * rateGain + (g - v_h^2 / (R + h))
+  //   pitch = asin(a_y / (thrust / mass))
+  // -------------------------------------------------------------------------
+  guidance: {
+    engageAltitude: 32000, // m
+    altitudeGain: 0.011, // 1/s
+    minClimb: -60, // m/s
+    maxClimb: 1400, // m/s
+    rateGain: 0.06, // 1/s
+    // Cut off (auto-insert) once horizontal speed is within this of target.
+    cutoffMargin: 12, // m/s
+  },
 
   // -------------------------------------------------------------------------
   // Insertion target — an altitude and speed band, deliberately not an orbit

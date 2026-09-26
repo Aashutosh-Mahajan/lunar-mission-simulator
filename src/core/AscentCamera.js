@@ -24,6 +24,11 @@ export const ASCENT_CAMERA_LABELS = {
 
 const FOV = { pad: 42, tracking: 18, chase: 48, onboard: 62, nose: 65 };
 
+// Tracker auto-zoom: the frame height covers this many vehicle lengths (the
+// stack plus a good length of plume), never narrower than TRACKER_MIN_FOV.
+const TRACKER_FRAMING = 3.2;
+const TRACKER_MIN_FOV = 0.35; // degrees
+
 export default class AscentCamera {
   constructor(camera) {
     this.camera = camera;
@@ -187,6 +192,19 @@ export default class AscentCamera {
         this._offset.lerp(this._tmp, 1 - Math.exp(-lambda * dt));
       }
       this._pos.copy(this._target).add(this._offset);
+    }
+
+    // --- Tracker zoom --------------------------------------------------------
+    // Range cameras were long-lens telescopes with an operator riding the
+    // zoom. A fixed lens left the Saturn V a few pixels tall within a minute
+    // of liftoff; this keeps the stack and its plume at a steady size.
+    if (this.mode === "tracking") {
+      const range = Math.max(1, this._pos.distanceTo(this._target));
+      const framed = vehicleHeight * TRACKER_FRAMING;
+      const want = THREE.MathUtils.radToDeg(2 * Math.atan(framed / (2 * range)));
+      const fov = THREE.MathUtils.clamp(want, TRACKER_MIN_FOV, FOV.tracking);
+      this.camera.fov += (fov - this.camera.fov) * (1 - Math.exp(-2.5 * dt));
+      this.camera.updateProjectionMatrix();
     }
 
     // --- Shake -------------------------------------------------------------

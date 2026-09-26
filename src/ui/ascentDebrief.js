@@ -14,9 +14,10 @@ function row(label, value, verdict) {
  * @param {object} result from AscentRuntime
  * @param {object} bestInfo { best, improved }
  */
-export function renderAscentDebrief(result, bestInfo) {
+export function renderAscentDebrief(result, bestInfo, mission = ASCENT_MISSION) {
   const stats = result.stats;
-  const limits = ASCENT_MISSION.limits;
+  // The flown mission, so the limits quoted match the difficulty it ran at.
+  const limits = mission.limits;
   const evaluation = result.evaluation;
 
   const titleEl = document.getElementById("asc-result-title");

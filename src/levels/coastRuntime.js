@@ -1,6 +1,7 @@
 import * as THREE from "three";
 import SpaceScene from "../scenes/spaceScene.js";
 import Spacecraft from "../entities/Spacecraft.js";
+import { applyCoastDifficulty, DEFAULT_DIFFICULTY } from "./difficulty.js";
 
 // ---------------------------------------------------------------------------
 // Phase 3 — trans-lunar injection and the coast to the Moon.
@@ -45,11 +46,11 @@ export const TLI_MISSION = {
 };
 
 export default class CoastRuntime {
-  constructor({ scene, assets, audio }) {
+  constructor({ scene, assets, audio, difficulty = DEFAULT_DIFFICULTY }) {
     this.scene = scene;
     this.assets = assets;
     this.audio = audio;
-    this.mission = TLI_MISSION;
+    this.mission = applyCoastDifficulty(TLI_MISSION, difficulty);
 
     this.space = new SpaceScene(scene, assets);
     this.craft = new Spacecraft(scene, assets);
@@ -179,7 +180,11 @@ export default class CoastRuntime {
     // rather than letting the player hold forever.
     const value = isTli ? this.deltaV : this.loiDeltaV;
     const band = isTli ? this.mission.deltaVBand : this.mission.loiBand;
-    if (value > band[1] * 1.5) this._resolveBurn(which);
+    const target = isTli ? this.mission.targetDeltaV : this.mission.loiTargetDeltaV;
+    // Cadet: the guidance computer shuts the engine down on the target, as
+    // the real S-IVB and SPS did. The player only has to light it.
+    if (this.mission.autoCutoff && value >= target) this._resolveBurn(which);
+    else if (value > band[1] * 1.5) this._resolveBurn(which);
   }
 
   /** Player-commanded cut-off. */

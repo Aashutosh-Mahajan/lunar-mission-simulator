@@ -46,6 +46,9 @@ export default class AscentHud {
       pitchCmd: el("asc-pitch-cmd"),
       pitchNeedle: el("pitch-needle"),
       pitchCmdNeedle: el("pitch-cmd-needle"),
+      pitchFdNeedle: el("pitch-fd-needle"),
+      pitchFd: el("asc-pitch-fd"),
+      pitchFdRow: el("asc-pitch-fd-row"),
 
       insertionFill: el("insertion-fill"),
       insertionAlt: el("insertion-alt"),
@@ -101,6 +104,9 @@ export default class AscentHud {
   }
 
   update(runtime, dt) {
+    // The runtime's mission carries the difficulty's windows and limits; the
+    // base config does not, so read it from the flight being flown.
+    this.mission = runtime.mission;
     const t = runtime.telemetry;
     const s = runtime.state;
     const L = this.mission.limits;
@@ -172,14 +178,28 @@ export default class AscentHud {
     this._valueClass(this.dom.aoa, aoaRatio);
 
     // --- Pitch tape --------------------------------------------------------
-    // 0-90 degrees mapped onto the tape; the commanded needle shows where the
-    // gravity-turn program wants the vehicle to be.
-    const scheduled = programmedPitch(t.altitude);
+    // 0-90 degrees mapped onto the tape. CMD is what the vehicle is actually
+    // being steered to — the program *plus* the player's W/S bias. (It used to
+    // show the bare program, so the needle the player was told to hold did
+    // not move when they steered.) FD is the flight director's recommendation
+    // once it engages: put CMD on FD and the insertion takes care of itself.
     this.dom.pitchActual.textContent = `${t.pitch.toFixed(1)}°`;
-    this.dom.pitchCmd.textContent = `${scheduled.toFixed(1)}°`;
+    this.dom.pitchCmd.textContent = `${t.commandedPitch.toFixed(1)}°`;
     const toPct = (p) => `${(1 - THREE.MathUtils.clamp(p, 0, 90) / 90) * 100}%`;
     this.dom.pitchNeedle.style.top = toPct(t.pitch);
-    this.dom.pitchCmdNeedle.style.top = toPct(scheduled);
+    this.dom.pitchCmdNeedle.style.top = toPct(t.commandedPitch);
+
+    const director = runtime.guidanceBias;
+    const fdActive = director !== null && director !== undefined && runtime.status === "flying";
+    this.dom.pitchFdNeedle.classList.toggle("hidden", !fdActive);
+    this.dom.pitchFdRow.classList.toggle("dim", !fdActive);
+    if (fdActive) {
+      const fdPitch = programmedPitch(s.programAltitude) + director;
+      this.dom.pitchFdNeedle.style.top = toPct(fdPitch);
+      this.dom.pitchFd.textContent = runtime.assists?.autoGuidance ? "AUTO" : `${fdPitch.toFixed(1)}°`;
+    } else {
+      this.dom.pitchFd.textContent = "—";
+    }
 
     // --- Insertion cue -----------------------------------------------------
     const altPass = t.altitude >= O.altitudeBand[0] && t.altitude <= O.altitudeBand[1];
