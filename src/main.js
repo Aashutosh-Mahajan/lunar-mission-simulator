@@ -1122,6 +1122,7 @@ class Game {
     const handoff = this.ascentCamera.autoHandoff(this.ascent.telemetry.altitude);
     if (handoff) this.ascentHud.setCameraMode(ASCENT_CAMERA_LABELS[handoff]);
 
+    this.ascentCamera.setDynamicPressure(this.ascent.telemetry.dynamicPressure);
     this.ascentCamera.update(
       dt,
       this.ascent.state,

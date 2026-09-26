@@ -1,4 +1,5 @@
 import * as THREE from "three";
+import { applyShake } from "./shake.js";
 import MouseLook from "./MouseLook.js";
 
 // ---------------------------------------------------------------------------
@@ -39,7 +40,6 @@ export default class CameraRig {
     this._desired = new THREE.Vector3();
     this._lookAt = new THREE.Vector3();
     this._smoothLook = new THREE.Vector3();
-    this._shake = new THREE.Vector3();
     this._tmp = new THREE.Vector3();
     this._toLander = new THREE.Vector3();
     this._toPad = new THREE.Vector3();
@@ -163,23 +163,15 @@ export default class CameraRig {
 
     // --- Shake ------------------------------------------------------------
     // Engine vibration is structure-borne: the crew felt the DPS even though
-    // they could not hear it through vacuum.
-    const engineShake = s.engineOn ? s.throttle * 0.09 : 0;
+    // they could not hear it through vacuum — so it is felt in the cockpit
+    // and barely at all by an external camera. Touchdown and crash jolts are
+    // the only strong shakes. See core/shake.js for why it is rotational and
+    // low-frequency.
     this.impulse = Math.max(0, this.impulse - dt * 2.6);
-    const amount = engineShake + this.impulse;
-    if (amount > 0.0005) {
-      const f = elapsed * 47;
-      this._shake.set(
-        Math.sin(f * 1.7) * 0.6 + Math.sin(f * 3.1) * 0.4,
-        Math.sin(f * 2.3 + 1.1) * 0.6 + Math.sin(f * 4.7) * 0.4,
-        Math.sin(f * 1.3 + 2.2) * 0.5
-      );
-      this._shake.multiplyScalar(amount * (this.mode === "cockpit" ? 0.13 : 0.32));
-    } else {
-      this._shake.set(0, 0, 0);
-    }
+    const engine = s.engineOn ? s.throttle : 0;
+    const amount = this.impulse * 0.55 + engine * (this.mode === "cockpit" ? 0.12 : 0.03);
 
-    this.camera.position.copy(this._pos).add(this._shake);
+    this.camera.position.copy(this._pos);
 
     if (this.mode === "cockpit") {
       this.camera.quaternion.copy(this._cockpitQuat);
@@ -190,16 +182,10 @@ export default class CameraRig {
         this._lookQuat.setFromEuler(this._lookEuler);
         this.camera.quaternion.multiply(this._lookQuat);
       }
-      // Shake the cockpit view rotationally instead of translationally.
-      if (amount > 0.0005) {
-        this._tmpQ.setFromEuler(
-          new THREE.Euler(this._shake.y * 0.02, this._shake.x * 0.02, this._shake.z * 0.02)
-        );
-        this.camera.quaternion.multiply(this._tmpQ);
-      }
     } else {
       this.camera.lookAt(this._smoothLook);
     }
+    applyShake(this.camera, elapsed, amount);
   }
 
   _updateChase(focus, heading, s, terrain) {
@@ -236,9 +222,11 @@ export default class CameraRig {
     toPad.divideScalar(padRange);
 
     // Only when the pad is in front of the camera and within approach range.
+    // Both conditions fade in and out smoothly: a hard cut-off here made the
+    // view whip round the moment the pad crossed the threshold.
     const ahead = toLander.dot(toPad);
-    if (ahead <= 0.2) return;
-    const nearness = 1 - THREE.MathUtils.smoothstep(padRange, 350, 700);
+    const facing = THREE.MathUtils.smoothstep(ahead, 0.15, 0.5);
+    const nearness = (1 - THREE.MathUtils.smoothstep(padRange, 350, 700)) * facing;
     if (nearness <= 0) return;
 
     // Split the difference, capped so the lander stays inside ~40% of the

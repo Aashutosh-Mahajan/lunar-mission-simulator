@@ -98,12 +98,16 @@ const GradeShader = {
 };
 
 // Adaptive resolution thresholds (seconds per frame).
+// Dropping is quick; raising is slow and needs a wide margin. With symmetric
+// thresholds a GPU sitting near the boundary flipped between two scales every
+// couple of seconds, and the picture visibly softened and sharpened.
 const ADAPT = {
-  SLOW_FRAME: 1 / 48, // below ~48 fps, drop resolution
-  FAST_FRAME: 1 / 62, // above ~62 fps, allow it back up
+  SLOW_FRAME: 1 / 45, // below ~45 fps, drop resolution
+  FAST_FRAME: 1 / 75, // only above ~75 fps is there room to raise it again
   STEP: 0.1,
   MIN_SCALE: 0.55,
-  COOLDOWN: 1.5, // seconds between changes
+  COOLDOWN_DOWN: 1.5, // seconds after any change before dropping again
+  COOLDOWN_UP: 6, // seconds after any change before raising
 };
 
 export default class RenderPipeline {
@@ -194,7 +198,7 @@ export default class RenderPipeline {
     this.maxRenderScale = q === "low" ? 0.75 : q === "high" ? 1 : 0.9;
     this.renderScale = this.maxRenderScale;
     this._frameAvg = 1 / 60;
-    this._scaleCooldown = 0;
+    this._sinceChange = 0;
     this.resize();
   }
 
@@ -207,16 +211,18 @@ export default class RenderPipeline {
   _adaptResolution(dt) {
     if (!(dt > 0) || dt > 0.25) return; // tab switches, debugger pauses
     this._frameAvg += (dt - this._frameAvg) * 0.05;
-    this._scaleCooldown -= dt;
-    if (this._scaleCooldown > 0) return;
+    this._sinceChange = (this._sinceChange ?? 0) + dt;
 
     let next = this.renderScale;
-    if (this._frameAvg > ADAPT.SLOW_FRAME) next = Math.max(ADAPT.MIN_SCALE, this.renderScale - ADAPT.STEP);
-    else if (this._frameAvg < ADAPT.FAST_FRAME) next = Math.min(this.maxRenderScale, this.renderScale + ADAPT.STEP);
+    if (this._frameAvg > ADAPT.SLOW_FRAME && this._sinceChange > ADAPT.COOLDOWN_DOWN) {
+      next = Math.max(ADAPT.MIN_SCALE, this.renderScale - ADAPT.STEP);
+    } else if (this._frameAvg < ADAPT.FAST_FRAME && this._sinceChange > ADAPT.COOLDOWN_UP) {
+      next = Math.min(this.maxRenderScale, this.renderScale + ADAPT.STEP);
+    }
     if (Math.abs(next - this.renderScale) < 1e-3) return;
 
     this.renderScale = next;
-    this._scaleCooldown = ADAPT.COOLDOWN;
+    this._sinceChange = 0;
     this.resize();
     this.onResolutionChange?.();
   }

@@ -1,4 +1,5 @@
 import * as THREE from "three";
+import { applyShake } from "./shake.js";
 import MouseLook from "./MouseLook.js";
 
 // ---------------------------------------------------------------------------
@@ -29,6 +30,10 @@ const FOV = { pad: 42, tracking: 18, chase: 48, onboard: 62, nose: 65 };
 const TRACKER_FRAMING = 3.2;
 const TRACKER_MIN_FOV = 0.35; // degrees
 
+// Within this range of the vehicle, a ground camera takes the full acoustic
+// shake; beyond it the shake falls off with distance.
+const ACOUSTIC_RANGE = 400; // m
+
 export default class AscentCamera {
   constructor(camera) {
     this.camera = camera;
@@ -40,7 +45,6 @@ export default class AscentCamera {
     this._look = new THREE.Vector3();
     this._desired = new THREE.Vector3();
     this._target = new THREE.Vector3();
-    this._shake = new THREE.Vector3();
     this._tmp = new THREE.Vector3();
     // Camera position relative to the vehicle, for the flying camera modes.
     this._offset = new THREE.Vector3();
@@ -208,31 +212,39 @@ export default class AscentCamera {
     }
 
     // --- Shake -------------------------------------------------------------
-    // Five F-1s put out enough acoustic energy to shake a camera five hundred
-    // metres away; the effect falls off hard with distance.
-    const distance = this._pos.distanceTo(vehiclePos);
-    const acoustic = state.engineOn
-      ? (state.throttle * 700) / Math.max(60, distance)
-      : 0;
+    // Driven by what physically shakes each camera (see core/shake.js for the
+    // rotational, low-frequency, lens-relative form).
+    //
+    //   Ground cameras (pad, tracker): the acoustic field of five F-1s, which
+    //     falls off with range and only exists near the ground.
+    //   Onboard views: structure-borne engine vibration, plus aerodynamic
+    //     buffet that peaks with dynamic pressure around max-Q.
+    //   The chase view is a virtual camera flying alongside: it shakes only
+    //     for events — ignition, liftoff, staging.
+    //
+    // Previously every view got the acoustic term, capped at a 2.5 m
+    // positional offset at 10-35 Hz: the chase view moved 3.7 m and 2 degrees
+    // every frame, all the way to orbit.
     this.impulse = Math.max(0, this.impulse - dt * 2.2);
-    const amount = Math.min(2.5, acoustic * 0.5 + this.impulse);
-
-    if (amount > 0.001) {
-      const f = elapsed * 38;
-      this._shake.set(
-        Math.sin(f * 1.7) * 0.6 + Math.sin(f * 3.3) * 0.4,
-        Math.sin(f * 2.1 + 1.4) * 0.6 + Math.sin(f * 4.9) * 0.4,
-        Math.sin(f * 1.3 + 2.6) * 0.5
-      );
-      const scale = this.mode === "onboard" || this.mode === "nose" ? 0.35 : 1.0;
-      this._shake.multiplyScalar(amount * scale);
-    } else {
-      this._shake.set(0, 0, 0);
+    let amount = this.impulse * 0.45;
+    const firing = state.engineOn ? state.throttle : 0;
+    if (this.mode === "pad" || this.mode === "tracking") {
+      const range = this._pos.distanceTo(vehiclePos);
+      amount += firing * THREE.MathUtils.clamp(ACOUSTIC_RANGE / Math.max(range, 1), 0, 1) * 0.55;
+    } else if (this.mode === "onboard" || this.mode === "nose") {
+      const q = this._dynamicPressure ?? 0;
+      amount += firing * 0.1 + THREE.MathUtils.clamp(q / 35000, 0, 1) * 0.35;
     }
 
-    this.camera.position.copy(this._pos).add(this._shake);
+    this.camera.position.copy(this._pos);
     this.camera.up.set(0, 1, 0);
     this.camera.lookAt(this._look);
+    applyShake(this.camera, elapsed, amount);
+  }
+
+  /** Dynamic pressure, Pa, for the onboard buffet. Set by the shell. */
+  setDynamicPressure(q) {
+    this._dynamicPressure = q;
   }
 
   reset() {
