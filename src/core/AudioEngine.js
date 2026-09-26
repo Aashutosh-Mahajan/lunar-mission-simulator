@@ -22,6 +22,11 @@ export default class AudioEngine {
 
   /** Must be called from a user gesture; browsers block audio before one. */
   init() {
+    // Dev-only: `?silent` in the URL keeps the audio graph from ever starting,
+    // so automated test runs in a browser make no sound. Every audio method
+    // already tolerates a null context, so the game runs normally otherwise.
+    if (import.meta.env.DEV && new URLSearchParams(location.search).has("silent")) return;
+
     if (this.ctx) {
       if (this.ctx.state === "suspended") this.ctx.resume();
       return;
