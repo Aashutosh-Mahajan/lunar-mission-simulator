@@ -93,15 +93,23 @@ large angle of attack while there is still air, or pulling more than 6 g.
 ### Phase 3 — Trans-lunar coast
 
 The crossing from Earth orbit to the Moon. This is a *scripted transition*, not a third
-simulation: the sequence runs `parking → TLI → cruise → LOI → arrived`, and the two burns
+simulation: the sequence runs `parking → TLI → cruise → LOI → arrival`, and the two burns
 are graded on delta-v against a target band. The cruise between them is a time-warped
 visual with milestone callouts and a skip.
 
+The arrival is played out as a hands-off sequence after the capture burn: the stack
+settles into lunar orbit with the Moon swinging round beneath it and the LM's landing gear
+unfolding; the LM undocks, backs clear of the command module on its thrusters and pitches
+its descent engine toward the Moon; then the engine lights and the LM drops away toward
+the surface, which is where the landing picks up. `K` skips it.
+
 ### Campaign
 
-**Fly the Full Mission** runs all three phases as one continuous flight. Each leg's score
-is banked as it completes, and the mission score is the mean of the three. Failing any leg
-ends the run.
+**Fly the Full Mission** runs all three phases as one continuous flight. There is no
+debrief or "continue" between legs: a good orbit insertion fades straight into the coast,
+and the LM's descent fades straight into the landing. Each leg's score is banked as it
+completes and shown once, on the final debrief, where the mission score is the mean of the
+three. Failing any leg ends the run with that leg's debrief.
 
 ---
 
@@ -136,8 +144,7 @@ Cadet one, whatever the scores.
 The game can fly itself, in every phase and at every difficulty:
 
 - **The Autoplay switch** on the main menu applies to all three missions. With it on,
-  *Fly the Full Mission* flies launch, coast and landing, moving on from each debrief by
-  itself; *Launch Only* flies the launch to orbit; *Lunar Descent* flies whichever site
+  *Fly the Full Mission* flies launch, coast and landing in one continuous flight; *Launch Only* flies the launch to orbit; *Lunar Descent* flies whichever site
   you pick on the mission board.
 - **▶ Autoplay** on a site card flies just that landing, with the switch off.
 - **`O`** (or the pause menu) hands control to the computer mid-flight, and takes it back.
@@ -198,7 +205,7 @@ set no records and unlock nothing.
 | `Space` | Burn (hold) |
 | `I` | Cut off |
 | `,` / `.` | Time warp |
-| `K` | Skip the cruise |
+| `K` | Skip the cruise, or the arrival sequence |
 
 ### Everywhere
 
