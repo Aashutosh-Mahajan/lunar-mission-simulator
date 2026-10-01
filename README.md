@@ -11,9 +11,6 @@ mesh and sound in the project is generated procedurally at load time.
 
 [![CI](https://github.com/Aashutosh-Mahajan/lunar-mission-simulator/actions/workflows/ci.yml/badge.svg)](https://github.com/Aashutosh-Mahajan/lunar-mission-simulator/actions/workflows/ci.yml)
 
-> Computer Graphics course project — T.E. Information Technology, Semester V,
-> Vidyalankar Institute of Technology, Mumbai.
-
 ---
 
 ## Table of contents
