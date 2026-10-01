@@ -276,28 +276,36 @@ src/
     Rocket.js         Saturn V             LaunchComplex.js  Pad and tower
     Terrain.js        Height field and collision
     Environment.js    Lunar sky            Spacecraft.js     CSM + LM stack
+    EarthGlobe.js     Earth seen from orbit, cislunar space and the Moon
   levels/
     levelConfig.js    Data for the six descent sites
     difficulty.js     Cadet / Pilot / Commander presets
     levelLoader.js    Descent runtime
     ascentConfig.js   ascentRuntime.js     coastRuntime.js
   scenes/
-    earthScene.js     Ascent sky and globe
+    earthScene.js     Ascent sky, atmosphere and planet
     spaceScene.js     Cislunar sky
   materials/
     textures.js       Procedural texture baking
     noise.js          Simplex, FBM, ridged noise
     photometry.js     Lommel-Seeliger regolith shading
+    regolithShader.js Anti-tiling and close-range ground detail
+    atmosphere.js     Rayleigh/Mie/ozone scattering model
+    environmentMaps.js Image-based lighting probes
+    earthBake.js  moonBake.js              GPU-baked planet maps
+    sun.js            Sun disc, glare and diffraction spikes
     assets.js
   fx/
     particles.js      Plume, dust, ice, pyrotechnics
+    dustSheet.js      Blowing-regolith veil under the LM
   ui/
     hud.js  ascentHud.js  coastHud.js      Instrument panels
     debrief.js  ascentDebrief.js  coastDebrief.js
     levelSelect.js  leaderboard.js  campaign.js
     screens.js  settings.js  countdown.js  coach.js  difficultyPicker.js
   dev/
-    harness.js        Headless test pilots (dev server only, never shipped)
+    harness.js        Headless test pilots, screenshot cameras and GPU timing
+                      (dev server only, never shipped)
 ```
 
 Each phase is deliberately isolated: deleting the Phase 2 and Phase 3 files leaves the
