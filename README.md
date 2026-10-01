@@ -372,51 +372,74 @@ law. Two properties matter and were found by flying it:
 
 ## Graphics pipeline
 
-- **HDR rendering** with ACES filmic tone mapping, bloom, chromatic aberration, vignette,
-  film grain and SMAA (High) or FXAA (Medium) anti-aliasing.
-- **Lunar photometry.** Regolith is shaded with a Lommel–Seeliger/Lambert blend rather
-  than pure Lambert. Lommel–Seeliger is the standard first-order photometric law for the
-  Moon — the reason the full Moon is not darkened at its edge. At these sites' 5–15° sun
-  elevations, Lambert shading dropped the whole foreground to near-black; real surface
-  photography at those angles shows bright, readable ground with crisp shadows.
+Everything is calibrated against real photometry rather than tuned by eye, so the three
+phases follow one set of rules.
+
+- **One sun, one exposure model.** The sun has the same top-of-atmosphere irradiance in
+  every phase, set so that 0.12-albedo regolith lands at a photographic mid grey — Apollo
+  surface cameras were exposed for the soil. Each phase has its own exposure and camera
+  white balance, eased like auto-exposure. Bloom only catches true HDR sources.
+- **HDR rendering** with ACES filmic tone mapping, bloom, lens ghosts, chromatic
+  aberration, vignette, film grain and SMAA (High) or FXAA (Medium) anti-aliasing.
+- **Image-based lighting** in every phase, baked from a shader-only probe of each scene.
+  On the Moon the bright half of the environment is the sunlit ground below — the reason
+  the shadow side of an Apollo LM is never black and its underside glows gold.
+- **Lunar photometry.** Regolith is shaded with a Lommel–Seeliger/Lambert blend, the
+  standard first-order photometric law for the Moon, with a backscatter phase law (bright
+  down-sun, dark up-sun, an opposition surge round the vehicle's shadow) and almost no
+  specular. Terrain albedo is scaled from the baked texture's measured mean to a real
+  lunar value.
+- **Regolith detail.** The ground texture is anti-tiled per cell and gains a micro-relief
+  layer near the camera, so the surface stays sharp on final approach without the 12 m
+  tile repeating to the horizon.
+- **A physically based atmosphere** for the launch: Rayleigh, Mie and ozone single
+  scattering with a multiple-scattering term, marched once a frame into a small sky-view
+  lookup texture (after Hillaire, 2020). The same model gives the sun's colour through the
+  air, the haze over distant ground, a cumulus deck you climb through, and the thin blue
+  limb seen from orbit.
+- **Earth and Moon baked on the GPU** at load from 3D noise: Earth with real albedos and
+  its climate structure (equatorial cloud band, subtropical deserts, storm tracks, ice
+  caps, ocean sun-glint); the Moon with maria, a power-law crater population with rims and
+  central peaks, ray systems, and a normal map for relief at the terminator.
 - **Propellant-correct exhaust.** The S-IC's kerosene flame is the brilliant orange plume;
-  the upper stages burned liquid hydrogen, whose exhaust is almost invisible — a faint
-  blue-violet haze. The first stage also lays a smoke trail that thins out with the air.
+  the upper stages and the LM are nearly invisible in vacuum. The LM's blowing dust is a
+  terrain-draped sheet of radial streaks, as in the landing films, with ballistic grains
+  flying off its edge.
+- **The sun as a camera sees it**: a limb-darkened HDR disc with veiling glare and aperture
+  diffraction spikes, which the terrain and the vehicle can eclipse.
 - **Everything is procedural.** The repository ships no binary assets. Regolith PBR maps,
-  crinkled MLI foil, spacecraft panels, the Earth's surface and clouds, and the lunar
-  surface shader are all baked from noise at load time.
+  crinkled MLI foil, spacecraft panels, the Earth and the Moon are all baked at load time.
 - **Terrain self-shadowing is baked into vertex colours** by ray-marching toward the sun
-  when the height field is generated. Shadow mapping is unusable at the ~10° sun
-  elevations these sites are lit at — it produces acne across the whole surface.
+  when the height field is generated; shadow mapping is unusable at the ~10° sun
+  elevations these sites are lit at. The vehicle's shadow map tightens as it nears the
+  ground, so its own shadow is crisp at touchdown.
 - **Crater morphology follows real fresh craters**: a 1:5 depth-to-diameter ratio, a
   raised rim and decaying ejecta.
-- **Vacuum-correct effects.** Dust thrown by the plume travels ballistically in sheets and
-  does not billow; the over-expanded exhaust plume is nearly invisible; the nozzle glow
-  lights the ground beneath it.
 - **Procedural audio** through Web Audio — structure-borne engine rumble, RCS bangs,
   contact chimes, caution tones. No audio files.
 
 ### Performance
 
 - **Adaptive resolution** steps the render scale down when the frame rate drops below
-  ~48 fps and back up when there is headroom, so integrated GPUs stay smooth.
-- **Quality is picked from the GPU**, not the CPU core count, on first launch.
-- **Static geometry is batched.** The launch tower's ~115 beams are baked into one mesh,
-  which took the pad view from 371 draw calls to 170.
+  ~45 fps and back up when there is headroom, so integrated GPUs stay smooth.
+- **Quality is picked from the GPU** on first launch; Low turns off the ground detail
+  layers without a shader recompile.
+- **The sky is a lookup, not a march.** Marching the atmosphere per pixel cost ~9 ms a
+  frame on integrated graphics; the lookup texture brought it under 1 ms.
+- **No wasted lighting on the ground.** Image-based lighting is stripped from open
+  terrain, where it bought nothing and cost ~15% of the frame.
+- **Static geometry is batched.** The launch tower's ~115 beams are one mesh.
 - **Particle sprites are sized from the projection**, so they stay correct at any field of
-  view and resolution — including under the launch tracker's telephoto zoom.
-
-Measured on Intel UHD integrated graphics at 1440×810, Medium quality: 7.5–13.7 ms per
-frame across all three phases.
+  view and resolution.
 
 ### The scale problem
 
-An ascent spans 185 km with a 110 m vehicle, which will not fit in one depth buffer. The
-horizon dip angle depends only on `h/R`, so the Earth is drawn at **1/2000 scale with the
-camera's altitude scaled by the same factor**. Curvature and horizon position are then
-exact at every altitude while everything stays inside a small far plane. The globe is
-drawn behind everything without depth write, so the real-scale launch complex overlays it
-near the ground and fades out as it stops mattering.
+An ascent spans 185 km with a 110 m vehicle, which will not fit in one depth buffer. So
+the planet is not geometry at all: the sky is a sphere at the far plane whose shader
+intersects each view ray with a **true-scale spherical Earth** analytically and integrates
+the atmosphere along it. The horizon dip, the limb and the haze are exact at every
+altitude, and the depth range never sees the planet. The real-scale launch complex and its
+ground plane overlay it near the pad, lit and hazed by the same model.
 
 ---
 
