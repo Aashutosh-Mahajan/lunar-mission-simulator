@@ -176,8 +176,10 @@ export default class Lander {
       bellProfile.map((p) => new THREE.Vector2(p.x * 0.94, p.y)),
       24
     );
+    // The DPS nozzle extension was radiatively cooled niobium: in flight it
+    // glowed a dull orange-red, visible from below but nothing like a lamp.
     this.engineGlowMaterial = new THREE.MeshBasicMaterial({
-      color: 0xff7a2a,
+      color: 0xff5a1c,
       transparent: true,
       opacity: 0,
       side: THREE.BackSide,
@@ -195,7 +197,11 @@ export default class Lander {
 
     // Point light so the plume actually lights the ground on final approach.
     this.engineLight = new THREE.PointLight(0xffa451, 0, 90, 2);
-    this.engineLight.position.set(0, this.engineExitY - 0.5, 0);
+    // Placed a few metres down the plume rather than at the nozzle: a point
+    // light half a metre from the descent stage hot-spots its underside by
+    // inverse-square, far brighter than the sun, while the ground it is meant
+    // to light barely changes.
+    this.engineLight.position.set(0, this.engineExitY - 4, 0);
     this.group.add(this.engineLight);
   }
 
@@ -717,15 +723,20 @@ export default class Lander {
     const t = s.engineOn ? s.throttle * flicker : 0;
     this.engineGlowMaterial.opacity = THREE.MathUtils.lerp(
       this.engineGlowMaterial.opacity,
-      t * 0.95,
+      t * 0.55,
       1 - Math.exp(-14 * dt)
     );
+    // Hypergolic exhaust in vacuum is a weak light source. At 1400 cd the old
+    // light out-shone the sun by two orders of magnitude a few metres below
+    // the nozzle and floodlit the descent stage orange. At this level it
+    // warms the ground in the vehicle's own shadow on final approach and is
+    // lost in full sunlight, which is what the landing films show.
     this.engineLight.intensity = THREE.MathUtils.lerp(
       this.engineLight.intensity,
-      t * 1400,
+      t * 30,
       1 - Math.exp(-12 * dt)
     );
-    this.engineLight.distance = 60 + t * 70;
+    this.engineLight.distance = 40 + t * 30;
 
     // RCS jets flash on the side that produces the commanded torque.
     for (const jet of this.rcsJets) {

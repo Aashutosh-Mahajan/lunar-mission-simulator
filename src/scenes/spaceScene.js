@@ -201,6 +201,9 @@ export default class SpaceScene {
 
     this.journey = 0;
     scene.background = new THREE.Color(0x000000);
+
+    /** Photographic exposure: sunlit hardware against black space. */
+    this.exposure = 1.0;
   }
 
   _buildStars() {

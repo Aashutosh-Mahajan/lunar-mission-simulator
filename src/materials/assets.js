@@ -1,5 +1,7 @@
 import * as THREE from "three";
 import { applyLunarPhotometry } from "./photometry.js";
+import { applyRegolithDetail } from "./regolithShader.js";
+import { REGOLITH_ALBEDO } from "../constants.js";
 import * as CANNON from "cannon-es";
 import {
   buildRegolithMaps,
@@ -57,10 +59,11 @@ export async function buildAssets(onProgress = () => {}) {
   // Regolith is a very dark, almost perfectly diffuse powder. Its apparent
   // brightness comes from unfiltered sunlight, not from a bright albedo, so
   // the base colour stays dark and the lighting does the work.
+  // No roughness map: powder at roughness ~0.95 has no visible specular
+  // structure, and on the most-drawn surface in the game every fetch counts.
   const regolithMaps = {
     map: assets.regolith.map.clone(),
     normalMap: assets.regolith.normalMap.clone(),
-    roughnessMap: assets.regolith.roughnessMap.clone(),
   };
   for (const tex of Object.values(regolithMaps)) {
     tex.wrapS = THREE.RepeatWrapping;
@@ -76,9 +79,14 @@ export async function buildAssets(onProgress = () => {}) {
   }
   regolithMaps.map.colorSpace = THREE.SRGBColorSpace;
 
+  // Scale the map so the soil averages a real lunar albedo. Terrain vertex
+  // colours carry only relative variation (mean 1) and baked shadow.
+  const soilGain = REGOLITH_ALBEDO / assets.regolith.meanAlbedo;
+  assets.regolithTint = new THREE.Color(soilGain, soilGain * 0.975, soilGain * 0.93);
+
   assets.regolithMaterial = new THREE.MeshStandardMaterial({
     ...regolithMaps,
-    color: 0xa8a29a,
+    color: assets.regolithTint,
     vertexColors: true,
     roughness: 1,
     metalness: 0,
@@ -87,11 +95,17 @@ export async function buildAssets(onProgress = () => {}) {
   });
   // Regolith scatters like regolith, not like matte paint — see photometry.js.
   applyLunarPhotometry(assets.regolithMaterial);
+  // Break up the 12 m tile and resolve the ground on final approach.
+  // Shared by the other regolith surfaces (pad deck, far field) so they match
+  // the terrain they sit on.
+  assets.regolithDetail = { mapMean: assets.regolith.meanAlbedo, environment: false };
+  applyRegolithDetail(assets.regolithMaterial, assets.regolithDetail);
 
   assets.boulderMaterial = new THREE.MeshStandardMaterial({
     map: assets.regolith.map,
     normalMap: assets.regolith.normalMap,
-    color: 0x8f8a82,
+    // Exposed rock is a little brighter than the gardened soil around it.
+    color: assets.regolithTint.clone().multiplyScalar(1.25),
     roughness: 0.95,
     metalness: 0,
     flatShading: true,

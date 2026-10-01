@@ -1,5 +1,6 @@
 import * as THREE from "three";
-import { LUNAR_GRAVITY } from "../constants.js";
+import { LUNAR_GRAVITY, REGOLITH_ALBEDO, SUN_INTENSITY } from "../constants.js";
+import DustSheet from "./dustSheet.js";
 
 // ---------------------------------------------------------------------------
 // Particle effects, written for vacuum.
@@ -192,8 +193,11 @@ export default class ParticleSystem {
     // lofted sheet reads as a pale, dusty grey-brown.
     // Many small grains rather than a few big puffs: the ejecta sheet should
     // read as a fast, fine-grained spray, not as cotton wool.
-    this.dust = new Pool(scene, 4200, makeParticleMaterial(assets.dustSprite, 0xb3a794, { opacity: 0.5 }));
-    this.plume = new Pool(scene, 500, makeParticleMaterial(assets.glowSprite, 0xffb070, { additive: true, opacity: 0.32 }));
+    // Tinted to the radiance of sunlit regolith (the sprites are unlit): at
+    // the old pale tint every grain out-shone the ground it came from and
+    // the sheet read as glitter.
+    this.dust = new Pool(scene, 4200, makeParticleMaterial(assets.dustSprite, 0x948d82, { opacity: 0.5 }));
+    this.plume = new Pool(scene, 500, makeParticleMaterial(assets.glowSprite, 0xffb070, { additive: true, opacity: 0.1 }));
     this.sparks = new Pool(scene, 700, makeParticleMaterial(assets.glowSprite, 0xffd9a0, { additive: true, opacity: 0.9 }));
     this.debris = new Pool(scene, 400, makeParticleMaterial(assets.dustSprite, 0x8a8580, { opacity: 0.95 }));
     // Launch exhaust trail. Only ever used on Earth: it has drag and expands,
@@ -204,6 +208,12 @@ export default class ParticleSystem {
     this.pools = [this.dust, this.plume, this.sparks, this.debris, this.smoke];
 
     this._buildPlumeCone();
+
+    // The continuous veil of blowing regolith; the dust pool above supplies
+    // the grains that fly beyond it.
+    this.dustSheet = new DustSheet(scene);
+    const dustRadiance = (REGOLITH_ALBEDO * SUN_INTENSITY * 1.35) / Math.PI;
+    this.dustSheet.setColor(new THREE.Color(dustRadiance, dustRadiance * 0.96, dustRadiance * 0.9));
 
     this._acc = { dust: 0, plume: 0 };
   }
@@ -286,7 +296,11 @@ export default class ParticleSystem {
           float ripple = 0.82 + 0.18 * sin(vUv.y * 34.0);
           float flicker = 0.88 + 0.12 * hash(vec2(floor(time * 45.0), floor(vUv.y * 8.0)));
 
-          float a = density * body * ripple * flicker * throttle * 0.3;
+          // Barely there: an over-expanded hypergolic plume in vacuum is close
+          // to transparent, and in daylight it reads only as a faint warm
+          // haze just below the nozzle. (At 0.3, drawn double-sided, it was a
+          // solid white beam whenever it crossed sunlit ground.)
+          float a = density * body * ripple * flicker * throttle * 0.07;
           vec3 col = mix(edgeColor, coreColor, density);
           gl_FragColor = vec4(col, a);
         }
@@ -378,6 +392,12 @@ export default class ParticleSystem {
     if (proximity <= 0) return;
 
     const intensity = proximity * proximity * throttle;
+    // The sheet ramps in earlier than the grains: from altitude it is the
+    // first thing a pilot sees, a faint moving haze over the surface.
+    // Keyed mainly on height: by touchdown the LM is light and hovering at
+    // around 30% throttle, and that is exactly when the crews lost sight of
+    // the ground.
+    this.dustSheet.feed(contactPoint, Math.min(1, Math.pow(proximity, 0.8) * (0.55 + throttle * 1.2)), this.terrain);
     const rate = 2200 * intensity * this.quality;
     this._acc.dust += rate * dt;
 
@@ -494,6 +514,7 @@ export default class ParticleSystem {
   update(dt) {
     const g = this.gravity;
     const terrain = this.terrain;
+    this.dustSheet.update(dt);
 
     for (const pool of this.pools) {
       if (pool === this.smoke) {
@@ -579,10 +600,12 @@ export default class ParticleSystem {
     this._acc.dust = 0;
     this._acc.plume = 0;
     this.plumeCone.visible = false;
+    this.dustSheet.reset();
   }
 
   dispose() {
     for (const pool of this.pools) pool.dispose();
+    this.dustSheet.dispose();
     this.scene.remove(this.plumeCone);
     this.plumeCone.geometry.dispose();
     this.plumeMaterial.dispose();

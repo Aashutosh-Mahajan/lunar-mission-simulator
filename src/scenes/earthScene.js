@@ -182,6 +182,9 @@ export default class EarthScene {
     this._buildLights();
 
     scene.background = new THREE.Color(0x0b1c33);
+
+    /** Photographic exposure: a sunlit white vehicle under a blue sky. */
+    this.exposure = 1.0;
   }
 
   _buildSkyDome() {

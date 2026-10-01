@@ -88,6 +88,7 @@ export function buildRegolithMaps(seed = 1337, size = 512) {
     });
   }
 
+  let albedoSum = 0;
   for (let y = 0; y < size; y++) {
     for (let x = 0; x < size; x++) {
       const u = x / size;
@@ -132,6 +133,7 @@ export function buildRegolithMaps(seed = 1337, size = 512) {
       // Slope-driven darkening approximation: pits read darker.
       base += clamp(h, -1, 1) * 0.02;
       base = clamp(base, 0.06, 0.26);
+      albedoSum += base;
 
       // Convert linear reflectance to an 8-bit sRGB-ish value.
       const srgb = Math.pow(base, 1 / 2.2) * 255;
@@ -162,6 +164,9 @@ export function buildRegolithMaps(seed = 1337, size = 512) {
     map: finishTexture(albedoCanvas, { repeat: 1, srgb: true }),
     normalMap: finishTexture(normalCanvas, { repeat: 1 }),
     roughnessMap: finishTexture(roughCanvas, { repeat: 1 }),
+    // Mean linear reflectance of the albedo map, so materials can scale it to
+    // a calibrated real-world albedo rather than a guessed tint.
+    meanAlbedo: albedoSum / (size * size),
   };
 }
 

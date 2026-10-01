@@ -2,6 +2,7 @@ import * as THREE from "three";
 import * as CANNON from "cannon-es";
 import { makeSimplex2, makeRng, fbm, ridged, clamp, smoothstep, lerp } from "../materials/noise.js";
 import { applyLunarPhotometry } from "../materials/photometry.js";
+import { applyRegolithDetail } from "../materials/regolithShader.js";
 
 // ---------------------------------------------------------------------------
 // Lunar terrain: a real 3D height field, generated from the level config and
@@ -371,6 +372,8 @@ export default class Terrain {
 
     const pos = geometry.attributes.position;
     const colors = new Float32Array(pos.count * 3);
+    const shades = new Float32Array(pos.count);
+    let shadeSum = 0;
     const color = new THREE.Color();
 
     // Macro albedo variation: mare basalt is darker than highland breccia,
@@ -403,7 +406,17 @@ export default class Terrain {
       shade += slope * 0.12;
 
       shade = clamp(shade, 0.28, 1.0);
+      shades[i] = shade;
+      shadeSum += shade;
+    }
 
+    // Normalise to a mean of 1: the material carries the calibrated albedo
+    // (see assets.js), the vertex colours only the variation around it.
+    const shadeNorm = pos.count / shadeSum;
+    for (let i = 0; i < pos.count; i++) {
+      const ix = i % n;
+      const iz = Math.floor(i / n);
+      const shade = shades[i] * shadeNorm;
       // Baked terrain self-shadowing. Shadowed regolith also reads slightly
       // cooler, since its only illumination is starlight and bounce.
       const lit = this.sunLightFactor[iz * n + ix];
@@ -464,15 +477,20 @@ export default class Terrain {
       pos.setY(i, lerp(edge, coarse - 14, t));
     }
     geometry.computeVertexNormals();
+    // Same 12 m texel density as the playable field. RingGeometry's own UVs
+    // stretch one tile across the whole 7 km plate, which made the ground
+    // visibly change character at the edge of the play area.
+    this._worldUvs(geometry, 12);
 
     const material = new THREE.MeshStandardMaterial({
-      color: 0x6d675f,
+      color: this.assets.regolithTint.clone().multiplyScalar(0.92),
       roughness: 1,
       metalness: 0,
       map: this.assets.regolith.map,
       normalMap: this.assets.regolith.normalMap,
     });
     applyLunarPhotometry(material);
+    applyRegolithDetail(material, { ...this.assets.regolithDetail, microStrength: 0 });
     this.farField = new THREE.Mesh(geometry, material);
     this.farField.receiveShadow = false;
     this.group.add(this.farField);
@@ -568,16 +586,39 @@ export default class Terrain {
     geometry.computeBoundingSphere();
 
     const material = new THREE.MeshStandardMaterial({
-      color: 0x6f6961,
+      // Highland massifs are anorthositic and brighter than mare soil.
+      color: this.assets.regolithTint.clone().multiplyScalar(1.15),
       roughness: 1,
       metalness: 0,
       map: this.assets.regolith.map,
     });
     applyLunarPhotometry(material);
+    applyRegolithDetail(material, { ...this.assets.regolithDetail, microStrength: 0 });
     const mesh = new THREE.Mesh(geometry, material);
     mesh.receiveShadow = false;
     mesh.castShadow = false;
     return mesh;
+  }
+
+  /**
+   * Replaces a horizontal mesh's UVs with world-space ones at `tileMetres`
+   * per texture repeat, in the same phase as the terrain's own UVs.
+   * @param {THREE.BufferGeometry} geometry positions in the mesh's local frame
+   * @param {number} tileMetres
+   * @param {THREE.Vector3} [origin] the mesh's world position, if offset
+   */
+  _worldUvs(geometry, tileMetres, origin = null) {
+    const pos = geometry.attributes.position;
+    const uv = new Float32Array(pos.count * 2);
+    const ox = origin?.x ?? 0;
+    const oz = origin?.z ?? 0;
+    for (let i = 0; i < pos.count; i++) {
+      // Terrain UVs run 0..1 west to east and south to north (PlaneGeometry
+      // rotated flat), scaled by size / tile.
+      uv[i * 2] = (pos.getX(i) + ox + this.half) / tileMetres;
+      uv[i * 2 + 1] = (this.half - (pos.getZ(i) + oz)) / tileMetres;
+    }
+    geometry.setAttribute("uv", new THREE.BufferAttribute(uv, 2));
   }
 
   // -------------------------------------------------------------------------
@@ -644,16 +685,22 @@ export default class Terrain {
     // constantly lit orbs on posts — which read as science fiction.
     const deckGeo = new THREE.CircleGeometry(this.padRadius, 72);
     deckGeo.rotateX(-Math.PI / 2);
+    // Texel density and phase matched to the terrain underneath, so the deck
+    // reads as the same soil, swept — not as a disc of oversized craters.
+    this._worldUvs(deckGeo, 12, this.padCenter);
     const deckMaterial = new THREE.MeshStandardMaterial({
-      color: 0xa29d94,
+      color: this.assets.regolithTint.clone().multiplyScalar(1.12),
       roughness: 1,
       metalness: 0,
       map: this.assets.regolith.map,
       normalMap: this.assets.regolith.normalMap,
+      // Compacted: the micro-relief is pressed flat.
+      normalScale: new THREE.Vector2(0.45, 0.45),
       polygonOffset: true,
       polygonOffsetFactor: -2,
     });
     applyLunarPhotometry(deckMaterial);
+    applyRegolithDetail(deckMaterial, this.assets.regolithDetail);
     const deck = new THREE.Mesh(deckGeo, deckMaterial);
     deck.position.y = 0.04;
     deck.receiveShadow = true;
@@ -663,8 +710,9 @@ export default class Terrain {
     // them) and unlit — they read in sunlight by contrast alone, which on a
     // grey surface is plenty from altitude. Two rings of segmented panels and
     // a centre cross, rather than continuous painted lines.
+    // Albedo ~0.3: pale cloth under a film of dust, against ~0.12 soil.
     const panelMat = new THREE.MeshStandardMaterial({
-      color: 0xe6e2d8,
+      color: this.assets.regolithTint.clone().multiplyScalar(2.4),
       roughness: 0.92,
       metalness: 0,
       map: this.assets.regolith.map,

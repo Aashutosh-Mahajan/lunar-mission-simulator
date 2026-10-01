@@ -1,12 +1,16 @@
 import * as THREE from "three";
 import { makeRng, makeSimplex2, fbm, clamp } from "../materials/noise.js";
-import { buildEarthMaps, buildSunSprite } from "../materials/textures.js";
+import { buildEarthMaps } from "../materials/textures.js";
+import { createSun } from "../materials/sun.js";
+import { createLunarProbe } from "../materials/environmentMaps.js";
 import {
   SUN_COLOR,
   SUN_INTENSITY,
   AMBIENT_SKY_COLOR,
   AMBIENT_GROUND_COLOR,
   AMBIENT_INTENSITY,
+  LUNAR_EXPOSURE,
+  REGOLITH_ALBEDO,
 } from "../constants.js";
 
 // ---------------------------------------------------------------------------
@@ -63,7 +67,9 @@ const starFragmentShader = /* glsl */ `
 // Sky exposure: menu backdrop (no sunlit ground) versus on the surface.
 const SKY_EXPOSURE = {
   open: { threshold: 0.0, gain: 1.0, milkyWay: 1.0 },
-  surface: { threshold: 0.98, gain: 0.55, milkyWay: 0.0 },
+  // Only the handful of brightest stars (and planets) survive an exposure
+  // set for sunlit ground; at 0.98 several hundred did.
+  surface: { threshold: 1.1, gain: 0.45, milkyWay: 0.0 },
 };
 
 const atmosphereVertexShader = /* glsl */ `
@@ -122,7 +128,32 @@ export default class Environment {
     this._buildEarth();
     this._buildLights();
 
+    // Image-based lighting: the sunlit ground below and Earth above, baked
+    // into a pre-filtered environment for every PBR material in the scene.
+    // Rebaked per site in configure(), since the sun moves.
+    this.probe = assets?.renderer ? createLunarProbe(assets.renderer) : null;
+    this.envTexture = null;
+    this._bakeEnvironment();
+
+    /** Photographic exposure for a sunlit lunar scene (see constants.js). */
+    this.exposure = LUNAR_EXPOSURE;
+
     scene.background = new THREE.Color(0x000000);
+  }
+
+  _bakeEnvironment() {
+    if (!this.probe) return;
+    const u = this.probe.uniforms;
+    u.sunDirection.value.copy(this.sunDirection);
+    u.sunIrradiance.value = SUN_INTENSITY;
+    u.groundAlbedo.value.setRGB(REGOLITH_ALBEDO, REGOLITH_ALBEDO * 0.96, REGOLITH_ALBEDO * 0.9);
+    // The lower the sun, the more of the ground in view sits in shadow —
+    // above ~25 degrees almost every surface is lit.
+    const el = this.options.sunElevationDeg;
+    u.shadowFraction.value = THREE.MathUtils.clamp(0.75 - el * 0.022, 0.15, 0.7);
+    u.earthDirection.value.copy(this.earthGroup.position).normalize();
+    this.envTexture = this.probe.bake();
+    if (this.group.visible) this.scene.environment = this.envTexture;
   }
 
   _computeSunDirection() {
@@ -253,36 +284,10 @@ export default class Environment {
     this.sunGroup.position.copy(this.sunDirection).multiplyScalar(dist);
     this.group.add(this.sunGroup);
 
-    const sprite = buildSunSprite();
-    // The sun subtends only about half a degree. The glare is deliberately a
-    // little larger than that (the sprite's soft halo plus the bloom pass do
-    // the work), but not so large that it washes the frame out.
-    const discSize = dist * 0.019;
-    const material = new THREE.SpriteMaterial({
-      map: sprite,
-      color: 0xffffff,
-      blending: THREE.AdditiveBlending,
-      depthWrite: false,
-      // Depth-tested: terrain, and the vehicle itself, must be able to
-      // eclipse the sun rather than the sprite drawing over everything.
-      depthTest: true,
-      transparent: true,
-    });
-    this.sunSprite = new THREE.Sprite(material);
-    this.sunSprite.scale.setScalar(discSize);
-    this.sunGroup.add(this.sunSprite);
-
-    // Small bright core to give the bloom pass something to latch onto.
-    const coreMat = new THREE.SpriteMaterial({
-      map: sprite,
-      color: 0xffffff,
-      blending: THREE.AdditiveBlending,
-      depthWrite: false,
-      depthTest: true,
-    });
-    this.sunCore = new THREE.Sprite(coreMat);
-    this.sunCore.scale.setScalar(discSize * 0.32);
-    this.sunGroup.add(this.sunCore);
+    // Depth-tested: terrain, and the vehicle itself, must be able to eclipse
+    // the sun rather than the sprite drawing over everything.
+    this.sun = createSun(dist, { depthTest: true });
+    this.sunGroup.add(this.sun.group);
   }
 
   _buildEarth() {
@@ -417,6 +422,8 @@ export default class Environment {
         .set(Math.cos(el) * Math.cos(az), Math.sin(el), Math.cos(el) * Math.sin(az))
         .multiplyScalar(SKY_RADIUS * 0.82);
     }
+
+    this._bakeEnvironment();
   }
 
   /**
@@ -464,6 +471,9 @@ export default class Environment {
     this.sunLight.castShadow = enabled && this._castShadow !== false;
     // Phase 2 tints the background for the Earth sky; take it back on return.
     if (enabled) this.scene.background = new THREE.Color(0x000000);
+    // The other phases bring their own image-based lighting.
+    if (enabled) this.scene.environment = this.envTexture;
+    else if (this.scene.environment === this.envTexture) this.scene.environment = null;
   }
 
   setQuality(quality) {
@@ -488,5 +498,8 @@ export default class Environment {
     this.scene.remove(this.sunLight);
     this.scene.remove(this.sunLight.target);
     this.scene.remove(this.ambient);
+    if (this.scene.environment === this.envTexture) this.scene.environment = null;
+    this.probe?.dispose();
+    this.sun.dispose();
   }
 }

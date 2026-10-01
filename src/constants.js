@@ -149,16 +149,35 @@ export const PHYSICS_FIXED_STEP = 1 / 60; // s
 
 // Sunlight colour and intensity. With no atmosphere the terminator is razor
 // sharp and shadows are nearly black, so ambient fill is deliberately tiny —
-// almost all fill light is bounce from the regolith itself.
-// Sun intensity is set so a light-toned sunlit surface lands near 1.5 in
-// linear radiance — comfortably inside the tone mapper's range and below the
-// bloom threshold. Pushing it higher makes ordinary lit surfaces cross the
-// bloom cut-off and the whole vehicle turns into a glowing blob.
+// almost all fill light is bounce from the regolith itself, which arrives
+// through the baked environment map.
+//
+// The intensity is calibrated against the ground, not the vehicle: Apollo
+// surface cameras were exposed for the regolith ("sunny 16"), which puts a
+// 0.12-albedo soil at a photographic mid grey. With three's photometric units
+// that needs an irradiance of about 4.4 at the scene's exposure. A white
+// sunlit panel then sits near 1.1 in linear radiance — bright, inside the tone
+// mapper's shoulder, and below the bloom threshold, so only true specular
+// glints flare.
 export const SUN_COLOR = 0xfff6e8;
-export const SUN_INTENSITY = 2.0;
+export const SUN_INTENSITY = 4.4;
 export const AMBIENT_SKY_COLOR = 0x0a1020; // faint starlight from above
 export const AMBIENT_GROUND_COLOR = 0x3a342c; // regolith bounce from below
-export const AMBIENT_INTENSITY = 0.5;
+// Ground bounce now arrives through the baked environment map (see
+// materials/environmentMaps.js), which knows where the sun is; this residual
+// hemisphere term only keeps fully shadowed terrain from crushing to black.
+export const AMBIENT_INTENSITY = 0.45;
+
+// Normal albedo of mare regolith: about 0.07 (Tranquility) to 0.12; highland
+// soils run to ~0.18. Terrain materials are calibrated to this value rather
+// than tinted by eye, so the ground and the spacecraft keep their real
+// brightness ratio — sunlit foil is several times brighter than the soil.
+export const REGOLITH_ALBEDO = 0.12;
+
+// Photographic exposure for the lunar surface. The scene's gain lives in the
+// sun's irradiance above; this is only the camera's small push, and emissive
+// effects (nozzle glow, plume, stars) are tuned against it.
+export const LUNAR_EXPOSURE = 1.18;
 
 // Altitude below which ground-interaction effects (dust blowing) kick in.
 export const DUST_ONSET_ALTITUDE = 30; // m

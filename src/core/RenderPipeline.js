@@ -126,10 +126,9 @@ export default class RenderPipeline {
     this.renderer.shadowMap.enabled = true;
     this.renderer.shadowMap.type = THREE.PCFShadowMap;
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    // Slight positive exposure: regolith is genuinely dark (albedo ~0.12), and
-    // ACES rolls the low end off hard, so a neutral exposure renders the
-    // surface muddier than the Apollo surface photography it should evoke.
-    this.renderer.toneMappingExposure = 1.18;
+    // Exposure is set per phase by the shell (setSceneExposure): each scene
+    // is exposed like a photograph of itself.
+    this.renderer.toneMappingExposure = 1;
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
 
     // Adaptive resolution is on unless the player has explicitly turned it
@@ -158,7 +157,10 @@ export default class RenderPipeline {
     // a sunlit diffuse surface already reads near 1, and thresholding below
     // that blooms the entire landscape into a haze. Only genuinely overbright
     // things — the sun, the nozzle glow, specular hotspots — should flare.
-    this.bloomPass = new UnrealBloomPass(size, 0.45, 0.5, 3.2);
+    // The threshold sits well above a sunlit white panel (~1.1 at the lunar
+    // calibration in constants.js) so only specular glints, the sun and
+    // genuinely hot things flare — not every lit surface.
+    this.bloomPass = new UnrealBloomPass(size, 0.45, 0.5, 6.0);
     this.composer.addPass(this.bloomPass);
 
     this.gradePass = new ShaderPass(GradeShader);
@@ -229,6 +231,20 @@ export default class RenderPipeline {
 
   setExposure(value) {
     this.gradePass.uniforms.exposure.value = value;
+  }
+
+  /**
+   * Photographic exposure for the current scene. Eased rather than snapped,
+   * like a camera's auto-exposure settling, so changing phase or scene
+   * brightness never pops.
+   */
+  setSceneExposure(value, dt = 1) {
+    const r = this.renderer;
+    const k = 1 - Math.exp(-4 * Math.min(dt, 0.25));
+    const current = r.toneMappingExposure;
+    // Ease in log space: exposure is perceived in stops.
+    const next = Math.exp(Math.log(current) + (Math.log(value) - Math.log(current)) * k);
+    r.toneMappingExposure = Math.abs(next - value) < 1e-3 ? value : next;
   }
 
   /** Brief exposure/vignette punch — used on impact. */

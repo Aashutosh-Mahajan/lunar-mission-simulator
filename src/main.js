@@ -136,6 +136,8 @@ class Game {
     });
 
     this.world.addContactMaterial(this.assets.contactMaterial);
+    // Scenes bake their own image-based lighting, which needs the renderer.
+    this.assets.renderer = this.pipeline.renderer;
 
     this.environment = new Environment(
       this.scene,
@@ -1047,6 +1049,11 @@ class Game {
 
     this._advanceAutoplayChain(dt);
     this.audio.update(dt);
+    // Each phase is exposed like a photograph of its own scene: a sunlit
+    // regolith plain, a launch under a blue sky, and sunlit hardware in space
+    // all need different gain.
+    const lit = this.coast?.space ?? this.ascent?.earth ?? this.environment;
+    if (lit?.exposure) this.pipeline.setSceneExposure(lit.exposure, dt);
     this.pipeline.render(dt, this.elapsed, raw);
   }
 
