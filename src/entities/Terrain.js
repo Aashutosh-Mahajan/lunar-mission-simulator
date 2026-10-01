@@ -2,7 +2,7 @@ import * as THREE from "three";
 import * as CANNON from "cannon-es";
 import { makeSimplex2, makeRng, fbm, ridged, clamp, smoothstep, lerp } from "../materials/noise.js";
 import { applyLunarPhotometry } from "../materials/photometry.js";
-import { applyRegolithDetail } from "../materials/regolithShader.js";
+import { applyRegolithDetail, setRegolithDetail } from "../materials/regolithShader.js";
 
 // ---------------------------------------------------------------------------
 // Lunar terrain: a real 3D height field, generated from the level config and
@@ -43,6 +43,9 @@ export default class Terrain {
     this.group = new THREE.Group();
     this.group.name = "terrain";
     scene.add(this.group);
+
+    // Regolith materials this terrain created, for quality changes.
+    this._detailMaterials = [];
 
     this.padCenter = new THREE.Vector3(config.pad.x, 0, config.pad.z);
     this.padRadius = config.pad.radius;
@@ -491,6 +494,7 @@ export default class Terrain {
     });
     applyLunarPhotometry(material);
     applyRegolithDetail(material, { ...this.assets.regolithDetail, microStrength: 0 });
+    this._detailMaterials.push(material);
     this.farField = new THREE.Mesh(geometry, material);
     this.farField.receiveShadow = false;
     this.group.add(this.farField);
@@ -594,6 +598,7 @@ export default class Terrain {
     });
     applyLunarPhotometry(material);
     applyRegolithDetail(material, { ...this.assets.regolithDetail, microStrength: 0 });
+    this._detailMaterials.push(material);
     const mesh = new THREE.Mesh(geometry, material);
     mesh.receiveShadow = false;
     mesh.castShadow = false;
@@ -701,6 +706,7 @@ export default class Terrain {
     });
     applyLunarPhotometry(deckMaterial);
     applyRegolithDetail(deckMaterial, this.assets.regolithDetail);
+    this._detailMaterials.push(deckMaterial);
     const deck = new THREE.Mesh(deckGeo, deckMaterial);
     deck.position.y = 0.04;
     deck.receiveShadow = true;
@@ -987,6 +993,11 @@ export default class Terrain {
   // -------------------------------------------------------------------------
   // Public API
   // -------------------------------------------------------------------------
+
+  /** Applies a regolith detail level (see regolithShader.js). */
+  setDetailLevel(level) {
+    for (const m of this._detailMaterials) setRegolithDetail(m, level);
+  }
 
   /** Horizontal distance from a world position to the pad centre. */
   distanceToPad(x, z) {

@@ -3,6 +3,7 @@ import * as CANNON from "cannon-es";
 
 import { buildAssets } from "./materials/assets.js";
 import Environment from "./entities/Environment.js";
+import { setRegolithDetail, regolithDetailFor } from "./materials/regolithShader.js";
 import ParticleSystem from "./fx/particles.js";
 import LevelRuntime from "./levels/levelLoader.js";
 import { LEVELS, getLevelById } from "./levels/levelConfig.js";
@@ -180,10 +181,19 @@ class Game {
     requestAnimationFrame((t) => this.loop(t));
   }
 
+  /** Regolith shader detail for the current quality (regolithShader.js). */
+  _applySurfaceDetail() {
+    if (!this.assets) return;
+    const level = regolithDetailFor(this.settings.quality);
+    setRegolithDetail(this.assets.regolithMaterial, level);
+    this.runtime?.terrain.setDetailLevel(level);
+  }
+
   applySettings() {
     this.pipeline.applySettings(this.settings);
     this.environment?.setQuality(this.settings.quality);
     this.ascent?.earth.setQuality(this.settings.quality);
+    this._applySurfaceDetail();
     this.particles?.setQuality(this.settings.particles);
     // Quality changes the render scale, which changes the buffer height.
     if (this.particles) this.particles.setViewport(this.pipeline.renderer);
@@ -476,6 +486,7 @@ class Game {
       audio: this.audio,
       difficulty: this.settings.difficulty,
     });
+    this._applySurfaceDetail();
 
     this.runtime.onTouchdownEffect = (energy) => {
       this.cameraRig.kick(0.35 + energy * 0.35);
@@ -1031,6 +1042,7 @@ class Game {
 
       this.cameraRig.update(dt, this.runtime.lander, this.runtime.terrain, this.elapsed);
       this.environment.update(this.camera, this.runtime.lander.state.position, dt);
+      this.environment.setShadowReach(this.runtime.telemetry.gearAltitude ?? 100);
 
       this.particles.update(dt);
       this.hud.update(this.runtime, this.camera, dt);

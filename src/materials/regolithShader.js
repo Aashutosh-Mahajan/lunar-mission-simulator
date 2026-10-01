@@ -143,16 +143,22 @@ export function applyRegolithDetail(material, options = {}) {
   const previous = material.onBeforeCompile;
   const previousKey = material.customProgramCacheKey?.bind(material);
 
+  // Created here rather than in the compile hook, so quality settings can be
+  // applied before the material has ever been drawn (setRegolithDetail).
+  const uniforms = {
+    rgMicroScale: { value: microScale },
+    rgMicroNear: { value: microNear },
+    rgMicroFar: { value: microFar },
+    rgMicroStrength: { value: microStrength },
+    rgMapMean: { value: mapMean },
+    rgTiling: { value: 1 },
+  };
+  material.userData.regolithUniforms = uniforms;
+  material.userData.regolithMicro = microStrength;
+
   material.onBeforeCompile = (shader, renderer) => {
     previous?.call(material, shader, renderer);
-    shader.uniforms.rgMicroScale = { value: microScale };
-    shader.uniforms.rgMicroNear = { value: microNear };
-    shader.uniforms.rgMicroFar = { value: microFar };
-    shader.uniforms.rgMicroStrength = { value: microStrength };
-    shader.uniforms.rgMapMean = { value: mapMean };
-    shader.uniforms.rgTiling = { value: 1 };
-    // Kept so the detail can be tuned (or switched off by quality) live.
-    material.userData.regolithUniforms = shader.uniforms;
+    Object.assign(shader.uniforms, uniforms);
 
     let fs = shader.fragmentShader;
     fs = fs.replace("#include <common>", `#include <common>\n${header}`);
@@ -174,4 +180,23 @@ ${fs}`;
     `${previousKey ? previousKey() : ""}|regolith-detail-${microStrength > 0 ? 1 : 0}-${environment ? 1 : 0}`;
   material.needsUpdate = true;
   return material;
+}
+
+/**
+ * Applies a quality level to a material patched by applyRegolithDetail.
+ * Both features are uniform-gated branches, so this costs no recompile.
+ * @param {THREE.Material} material
+ * @param {{ tiling: number, micro: number }} level 0..1 each
+ */
+export function setRegolithDetail(material, level) {
+  const u = material.userData.regolithUniforms;
+  if (!u) return;
+  u.rgTiling.value = level.tiling;
+  u.rgMicroStrength.value = material.userData.regolithMicro * level.micro;
+}
+
+/** Detail level for a graphics quality setting. */
+export function regolithDetailFor(quality) {
+  // Low drops both: on the weakest GPUs every fetch on the ground counts.
+  return quality === "low" ? { tiling: 0, micro: 0 } : { tiling: 1, micro: 1 };
 }

@@ -33,6 +33,8 @@ const GradeShader = {
     shadowTint: { value: new THREE.Color(0x0a1424) },
     exposure: { value: 1.0 },
     whiteBalance: { value: new THREE.Color(1, 1, 1) },
+    tBloom: { value: null },
+    flare: { value: 0 },
   },
   vertexShader: /* glsl */ `
     varying vec2 vUv;
@@ -50,7 +52,34 @@ const GradeShader = {
     uniform float exposure;
     uniform vec3 shadowTint;
     uniform vec3 whiteBalance;
+    uniform sampler2D tBloom;
+    uniform float flare;
     varying vec2 vUv;
+
+    // Lens ghosts (after John Chapman's screen-space lens flare): internal
+    // reflections between lens elements image every very bright source
+    // again, reflected through the optical centre, as a chain of soft,
+    // faintly coloured discs. Built from the bloom pass's already-blurred
+    // highlights, so only true HDR sources — the sun — produce them, and it
+    // costs a few fetches of a 1/8-resolution texture.
+    vec3 lensGhosts(vec2 uv) {
+      vec2 flipped = vec2(1.0) - uv;
+      vec2 step_ = (vec2(0.5) - flipped) * 0.38;
+      vec3 sum = vec3(0.0);
+      for (int i = 1; i <= 5; i++) {
+        vec2 s = flipped + step_ * float(i);
+        if (s.x < 0.0 || s.y < 0.0 || s.x > 1.0 || s.y > 1.0) continue;
+        // Brightest near the centre of the frame, gone at the edges.
+        float w = pow(1.0 - clamp(length(vec2(0.5) - s) / 0.7071, 0.0, 1.0), 6.0);
+        vec3 tint = i == 1 ? vec3(1.0, 0.75, 0.45)
+                  : i == 2 ? vec3(0.45, 0.75, 1.0)
+                  : i == 3 ? vec3(0.6, 1.0, 0.7)
+                  : i == 4 ? vec3(1.0, 0.6, 0.8)
+                  : vec3(0.8, 0.85, 1.0);
+        sum += texture2D(tBloom, s).rgb * w * tint;
+      }
+      return sum;
+    }
 
     // Integer-style hash (Hoskins). The usual fract(sin(dot(...))*43758.0)
     // trick is unusable here: at full-resolution fragment coordinates the
@@ -73,6 +102,8 @@ const GradeShader = {
       col.r = texture2D(tDiffuse, vUv + offset).r;
       col.g = texture2D(tDiffuse, vUv).g;
       col.b = texture2D(tDiffuse, vUv - offset).b;
+
+      if (flare > 0.0) col += lensGhosts(vUv) * flare;
 
       col *= exposure;
       // Camera white balance (see RenderPipeline.setWhiteBalance).
@@ -169,6 +200,10 @@ export default class RenderPipeline {
 
     this.gradePass = new ShaderPass(GradeShader);
     this.composer.addPass(this.gradePass);
+    // The bloom pass's third blur level (1/8 resolution) feeds the lens
+    // ghosts. Its targets are reallocated on resize, so this is refreshed in
+    // resize() as well.
+    this._linkFlare();
 
     this.outputPass = new OutputPass();
     this.composer.addPass(this.outputPass);
@@ -180,6 +215,10 @@ export default class RenderPipeline {
     this.composer.addPass(this.smaaPass);
     this.fxaaPass = new FXAAPass();
     this.composer.addPass(this.fxaaPass);
+  }
+
+  _linkFlare() {
+    this.gradePass.uniforms.tBloom.value = this.bloomPass.renderTargetsVertical[2]?.texture ?? null;
   }
 
   applySettings(settings) {
@@ -196,6 +235,8 @@ export default class RenderPipeline {
     this.adaptive = settings.adaptiveResolution !== false;
     this.bloomPass.strength = q === "high" ? 0.5 : 0.4;
     this.gradePass.uniforms.grain.value = settings.grade === false ? 0 : q === "high" ? 0.016 : 0.011;
+    // Ghosts need the bloom pass's blurred highlights.
+    this.gradePass.uniforms.flare.value = this.bloomPass.enabled && q !== "low" ? 0.06 : 0;
 
     // Render scale multiplies the (capped) device pixel ratio in resize().
     // High used to set this to the device pixel ratio itself, which squared
@@ -279,6 +320,7 @@ export default class RenderPipeline {
     this.renderer.setSize(w, h, false);
     this.composer.setPixelRatio(pr);
     this.composer.setSize(w, h);
+    this._linkFlare();
 
     this.camera.aspect = w / h;
     this.camera.updateProjectionMatrix();

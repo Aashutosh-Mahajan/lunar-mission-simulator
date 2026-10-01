@@ -70,7 +70,7 @@ const SKY_EXPOSURE = {
   open: { threshold: 0.0, gain: 1.0, milkyWay: 1.0 },
   // Only the handful of brightest stars (and planets) survive an exposure
   // set for sunlit ground; at 0.98 several hundred did.
-  surface: { threshold: 1.1, gain: 0.45, milkyWay: 0.0 },
+  surface: { threshold: 1.16, gain: 0.38, milkyWay: 0.0 },
 };
 
 export default class Environment {
@@ -406,6 +406,26 @@ export default class Environment {
     // The other phases bring their own image-based lighting.
     if (enabled) this.scene.environment = this.envTexture;
     else if (this.scene.environment === this.envTexture) this.scene.environment = null;
+  }
+
+  /**
+   * Fits the shadow frustum to how high the vehicle is. Lunar shadows are
+   * razor sharp, and the one that matters most — the vehicle's own, on final
+   * approach — is the one a frustum sized for the whole descent blurs: at
+   * ±190 m every shadow texel is a quarter of a metre. Near the ground it
+   * tightens to ±60 m (6 cm texels); since light space is foreshortened
+   * along the sun, that still reaches a few hundred metres down-sun.
+   */
+  setShadowReach(gearAltitude) {
+    const target = THREE.MathUtils.clamp(60 + gearAltitude * 0.9, 60, 190);
+    const cam = this.sunLight.shadow.camera;
+    // Re-fit only on a real change: each fit re-projects the shadow map.
+    if (Math.abs(cam.right - target) < 2) return;
+    cam.left = -target;
+    cam.right = target;
+    cam.top = target;
+    cam.bottom = -target;
+    cam.updateProjectionMatrix();
   }
 
   setQuality(quality) {

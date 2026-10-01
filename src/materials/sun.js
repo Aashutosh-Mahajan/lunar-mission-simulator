@@ -85,7 +85,7 @@ function glareTexture(size = 256, spikes = 6) {
 export function createSun(distance, options = {}) {
   const {
     discRadiance = 60,
-    glare = 2.2,
+    glare = 1.7,
     glareSize = 0.5,
     depthTest = true,
     color = 0xfffaf2,
