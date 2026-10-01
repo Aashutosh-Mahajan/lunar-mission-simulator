@@ -594,17 +594,6 @@ function seam(ctx, W, y, alpha = 0.35) {
   ctx.fillRect(0, y - 1, W, 2);
 }
 
-/** US flag, `w` by `h` pixels in world proportion, top-left at (x, y). */
-function flag(ctx, x, y, w, h) {
-  const stripe = h / 13;
-  for (let i = 0; i < 13; i++) {
-    ctx.fillStyle = i % 2 === 0 ? "#b22234" : "#f5f5f0";
-    ctx.fillRect(x, y + i * stripe, w, Math.ceil(stripe));
-  }
-  ctx.fillStyle = "#3c3b6e";
-  ctx.fillRect(x, y, w * 0.4, stripe * 7);
-}
-
 function liveryTexture(canvas) {
   const tex = finishTexture(canvas, { srgb: true, aniso: 16 });
   tex.wrapT = THREE.ClampToEdgeWrapping;
@@ -617,7 +606,7 @@ function liveryTexture(canvas) {
  * @param {number} radius m
  */
 export function buildSaturnLivery(stage, length, radius) {
-  const circumference = Math.PI * 2 * radius;
+  void radius; // the markings no longer depend on the stage's girth
   const W = 1024;
   const H = stage === "sic" ? 2048 : 1024;
   const canvas = document.createElement("canvas");
@@ -629,7 +618,6 @@ export function buildSaturnLivery(stage, length, radius) {
 
   // Height above the stage base (m) to canvas y, and metres to pixels.
   const Y = (h) => (1 - h / length) * H;
-  const pxPerMu = W / circumference; // round the stage
   const pxPerMv = H / length; // up the stage
 
   if (stage === "sic") {
@@ -644,11 +632,6 @@ export function buildSaturnLivery(stage, length, radius) {
     // Tank weld lines.
     for (const h of [9.5, 13.5, 17.0, 27.5, 31.5, 35.0]) seam(ctx, W, Y(h), 0.12);
 
-    // The flag on two opposite sides. (No lettering on the stage.)
-    for (const u of [0.25, 0.75]) {
-      const cx = u * W;
-      flag(ctx, cx - 1.5 * pxPerMu, Y(37.2), 3.0 * pxPerMu, 1.95 * pxPerMv);
-    }
   } else if (stage === "sii") {
     // Interstage skirt at the bottom, the stage's forward skirt at the top.
     stringers(ctx, W, Y(5.6), Y(0), 216, 0.16);
