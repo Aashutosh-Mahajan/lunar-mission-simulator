@@ -38,6 +38,9 @@ const MOON_NEAR = { radius: 2300, distance: 4025 }; // ~70° across, filling the
 const FLAT_NORMAL = new THREE.DataTexture(new Uint8Array([128, 128, 255, 255]), 1, 1);
 FLAT_NORMAL.needsUpdate = true;
 
+// Where the Moon sits once the stack is in lunar orbit: below, a little ahead.
+const ORBIT_MOON_DIR = new THREE.Vector3(0.05, -0.93, 0.36).normalize();
+
 const SUN_DEPARTURE = new THREE.Vector3(0.93, 0.3, 0.21).normalize();
 const SUN_ARRIVAL = new THREE.Vector3(0.74, 0.26, -0.62).normalize();
 
@@ -133,6 +136,10 @@ export default class SpaceScene {
     this._buildLights();
 
     this.journey = 0;
+    /** 0..1: settling into lunar orbit, then the LM's descent (see update). */
+    this.orbit = 0;
+    this.approach = 0;
+    this._moonDir = MOON_DIR.clone();
     scene.background = new THREE.Color(0x000000);
 
     /** Photographic exposure: sunlit hardware against black space. */
@@ -273,7 +280,7 @@ export default class SpaceScene {
     u.sunDirection.value.copy(this.sunDirection);
     u.earthDirection.value.copy(EARTH_DIR);
     u.earthCos.value = Math.cos(Math.asin(Math.min(earthRadius / earthDist, 0.999)));
-    u.moonDirection.value.copy(MOON_DIR);
+    u.moonDirection.value.copy(this._moonDir);
     u.moonCos.value = Math.cos(Math.asin(Math.min(moonRadius / moonDist, 0.999)));
     // Mean radiance of each sunlit disc: albedo x irradiance / pi.
     const k = SUN_INTENSITY / Math.PI;
@@ -307,8 +314,20 @@ export default class SpaceScene {
     this.earth.scale.setScalar(earthRadius);
     this.earth.position.copy(EARTH_DIR).multiplyScalar(earthDist);
 
+    // Arrival: in lunar orbit the Moon swings round beneath the stack and
+    // closes to orbital height (`orbit`), then rises to meet the LM as it
+    // descends (`approach`). Both are driven by the coast runtime.
+    const orbit = this.orbit;
+    const approach = this.approach;
+    this._moonDir.copy(MOON_DIR).lerp(ORBIT_MOON_DIR, orbit).normalize();
+    const orbitDist = moonRadius * (1 + THREE.MathUtils.lerp(0.17, 0.012, approach));
+    const placedDist = THREE.MathUtils.lerp(moonDist, orbitDist, orbit);
+
     this.moon.scale.setScalar(moonRadius);
-    this.moon.position.copy(MOON_DIR).multiplyScalar(moonDist);
+    this.moon.position.copy(this._moonDir).multiplyScalar(placedDist);
+    // The surface slides past below as the orbit carries the stack round —
+    // faster and faster in apparent terms as it gets closer.
+    this.moon.rotation.x += dt * (0.006 + approach * 0.02) * orbit;
 
     // Sun direction for this point in the crossing (see the constructor).
     const turn = THREE.MathUtils.smoothstep(journey, 0.25, 0.95);
@@ -319,9 +338,10 @@ export default class SpaceScene {
 
     this.earthGlobe.update(dt);
 
-    if (Math.abs(journey - this._probeJourney) > 0.01) {
-      this._probeJourney = journey;
-      this._bakeProbe(earthRadius, earthDist, moonRadius, moonDist);
+    const probeKey = journey + orbit * 2 + approach * 4;
+    if (Math.abs(probeKey - this._probeJourney) > 0.01) {
+      this._probeJourney = probeKey;
+      this._bakeProbe(earthRadius, earthDist, moonRadius, placedDist);
     }
 
     this.sunLight.position.copy(camera.position).addScaledVector(this.sunDirection, 1000);

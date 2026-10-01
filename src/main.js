@@ -623,6 +623,15 @@ class Game {
 
   _finishAscent() {
     const result = this.ascent.result;
+    // Full mission: a good insertion carries straight on into the coast —
+    // no debrief, no button. The scores are banked for the final debrief.
+    if (this.campaign.active && result.outcome === "orbit") {
+      if (!this._autoplayUsed) recordAscentResult(result.outcome, result.stats, this.settings.difficulty);
+      this.campaign.complete("ascent", this._legScore("ascent"));
+      this.screens.setCountdownVisible(false);
+      this._campaignHandOff(() => this.startCoast());
+      return;
+    }
     // The banner is normally hidden by the flight loop; the debrief must not
     // depend on that having run since the count ended.
     this.screens.setCountdownVisible(false);
@@ -667,7 +676,16 @@ class Game {
       scene: this.scene,
       assets: this.assets,
       audio: this.audio,
+      particles: this.particles,
     });
+    this.coast.onUndock = () => {
+      this.audio.beep(940, 0.12, 0.08);
+      this.coastHud.showHint("Undocking — the LM separates from the command module", 4);
+    };
+    this.coast.onLmIgnition = () => {
+      this.audio.beep(1180, 0.16, 0.09);
+      this.coastHud.showHint("Descent engine ignition — the LM is on its way down", 4);
+    };
 
     this.coast.onEvent = (text) => this.coastHud.pushLogEntry(this.coast.elapsed, text);
     this.coast.onBurnWindow = (which) => {
@@ -707,6 +725,12 @@ class Game {
   }
 
   _finishCoast() {
+    if (this.campaign.active && this.coast.result.outcome === "arrived") {
+      this.campaign.complete("coast", this._legScore("coast"));
+      // The LM is already on its way down: hand straight over to the landing.
+      this._campaignHandOff(() => this.startLevel(1));
+      return;
+    }
     renderCoastDebrief(this.coast.result);
 
     this._applyCampaignUi(
@@ -716,7 +740,7 @@ class Game {
       {
         button: "btn-coast-descend",
         campaignLabel: "Undock & Land at Tranquility",
-        defaultLabel: "Undock & Descend",
+        defaultLabel: "Continue to Landing",
       }
     );
 
@@ -729,7 +753,9 @@ class Game {
   }
 
   _updateCoast(dt, controls, mouse) {
-    const simulating = this.state === "flight";
+    // Keeps running under a full-mission hand-over fade, so the LM is still
+    // flying down as the picture goes to black.
+    const simulating = this.state === "flight" || this.state === "transition";
     if (simulating) {
       const burn = this.autoplay.active ? this.autoplay.coastControls(this.coast).burn : controls.burn;
       this.coast.update(dt, { burn });
@@ -737,7 +763,9 @@ class Game {
 
     this.coastCamera.drag(mouse.dx, mouse.dy);
     if (mouse.wheel) this.coastCamera.zoom(mouse.wheel);
-    this.coastCamera.update(dt, this.coast.craft, this.coast.space, this.elapsed);
+    this.coastCamera.update(
+      dt, this.coast.craft, this.coast.space, this.elapsed, this.coast.focus, this.coast.focusDistance
+    );
     this.coast.space.update(this.camera, this.coast.journey, dt);
 
     this.particles.update(dt);
@@ -748,7 +776,10 @@ class Game {
 
     if (this.state === "flight" && this.coast.result) {
       this.resultTimer += dt;
-      if (this.resultTimer >= RESULT_DELAY) this._finishCoast();
+      // The arrival sequence already ends on the LM flying down; in the full
+      // mission there is nothing to wait for.
+      const wait = this.campaign.active && this.coast.result.outcome === "arrived" ? 0 : RESULT_DELAY;
+      if (this.resultTimer >= wait) this._finishCoast();
     }
   }
 
@@ -776,6 +807,49 @@ class Game {
         node.textContent = this.campaign.active ? btn.campaignLabel : btn.defaultLabel;
       }
     }
+  }
+
+  /**
+   * Full mission: fades to black, starts the next leg, and fades back in.
+   * The leg in progress keeps rendering under the fade, so the hand-over
+   * reads as a cut, not a freeze.
+   */
+  _campaignHandOff(startNext) {
+    if (this._handingOff) return;
+    this._handingOff = true;
+    this.state = "transition";
+    this.input.setEnabled(false);
+    // Autoplay switched on for one leg covers that leg only; watching the
+    // whole mission carries it on.
+    if (!this.autoplayChain) this.autoplay.active = false;
+    this._fade(1, 0.9, () => {
+      startNext();
+      this._handingOff = false;
+      this._fade(0, 1.3);
+    });
+  }
+
+  /** Full-screen fade to (1) or from (0) black over `seconds`. */
+  _fade(to, seconds, done) {
+    let veil = this._veil;
+    if (!veil) {
+      veil = this._veil = document.createElement("div");
+      veil.id = "phase-fade";
+      Object.assign(veil.style, {
+        position: "fixed",
+        inset: "0",
+        background: "#000",
+        opacity: "0",
+        pointerEvents: "none",
+        zIndex: "50",
+      });
+      document.body.appendChild(veil);
+    }
+    veil.style.transition = `opacity ${seconds}s ease`;
+    // Force the starting value to apply before the transition target.
+    void veil.offsetWidth;
+    veil.style.opacity = String(to);
+    if (done) setTimeout(done, seconds * 1000);
   }
 
   _legScore(legId) {
@@ -1130,7 +1204,8 @@ class Game {
 
   /** Per-frame update for a launch. */
   _updateAscent(dt, controls, mouse) {
-    const simulating = this.state === "flight" || this.state === "result";
+    // Keeps running under a full-mission hand-over fade.
+    const simulating = this.state === "flight" || this.state === "result" || this.state === "transition";
     const live = this.state === "flight";
 
     if (simulating) {

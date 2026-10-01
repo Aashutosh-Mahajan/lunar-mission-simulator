@@ -18,7 +18,13 @@ import { applyCoastDifficulty, DEFAULT_DIFFICULTY } from "./difficulty.js";
 //   tli        hold the engine until the delta-v target is met, then cut off
 //   cruise     time-compressed crossing with milestones; Earth shrinks, Moon grows
 //   loi        lunar orbit insertion burn
+//   orbit      the stack settles into lunar orbit; the LM's gear comes down
+//   undock     the LM separates, backs clear and turns its engine to the Moon
+//   lmDescent  descent-orbit burn: the LM drops away toward the surface
 //   arrived    hands off to the Phase 1 descent
+//
+// The last three are a scripted, hands-off sequence — the hand-over from the
+// coast to the landing — and can be skipped with K like the crossing.
 // ---------------------------------------------------------------------------
 
 export const TLI_MISSION = {
@@ -34,6 +40,10 @@ export const TLI_MISSION = {
   // Crossing took about three days; compressed to a couple of playable minutes.
   cruiseSeconds: 96,
   parkingHoldSeconds: 8,
+  // The arrival sequence, in seconds of each step.
+  orbitSeconds: 6,
+  undockSeconds: 10,
+  lmDescentSeconds: 9,
   milestones: [
     { at: 0.02, text: "S-IVB restart · trans-lunar injection complete" },
     { at: 0.12, text: "Transposition and docking · LM extracted from the adapter" },
@@ -46,10 +56,11 @@ export const TLI_MISSION = {
 };
 
 export default class CoastRuntime {
-  constructor({ scene, assets, audio, difficulty = DEFAULT_DIFFICULTY }) {
+  constructor({ scene, assets, audio, particles = null, difficulty = DEFAULT_DIFFICULTY }) {
     this.scene = scene;
     this.assets = assets;
     this.audio = audio;
+    this.particles = particles;
     this.mission = applyCoastDifficulty(TLI_MISSION, difficulty);
 
     this.space = new SpaceScene(scene, assets);
@@ -76,6 +87,17 @@ export default class CoastRuntime {
     this.craft.group.position.set(0, 0, 0);
     // Nose pointing along +Z so the chase camera looks down the stack.
     this.craft.group.rotation.set(Math.PI / 2, 0, 0);
+
+    /**
+     * What the camera should follow during the arrival sequence: the LM once
+     * it is flying on its own. Null means "the stack".
+     */
+    this.focus = null;
+    /** How far back the camera should sit from the focus. */
+    this.focusDistance = 30;
+    this._lmUndocked = false;
+    this._v = new THREE.Vector3();
+    this._q = new THREE.Quaternion();
   }
 
   logEvent(key, text) {
@@ -95,6 +117,14 @@ export default class CoastRuntime {
     // burn would keep accumulating delta-v and the report would quote a
     // number the player never actually flew.
     if (this.result) {
+      // After the arrival sequence the LM keeps flying down while the shell
+      // hands over to the landing; nothing is graded any more.
+      if (this.result.outcome === "arrived" && this._lmUndocked) {
+        this.elapsed += rawDt;
+        this.phaseTime += rawDt;
+        this._updateLmDescent(rawDt);
+        return this.telemetry;
+      }
       this.throttle = 0;
       this.engineOn = false;
       this.craft.setEngine(0, this.elapsed);
@@ -122,11 +152,21 @@ export default class CoastRuntime {
       case "loi":
         this._updateBurn(dt, controls, "loi");
         break;
+      case "orbit":
+        this._updateOrbit(dt);
+        break;
+      case "undock":
+        this._updateUndock(dt);
+        break;
+      case "lmDescent":
+        this._updateLmDescent(dt);
+        break;
       default:
         break;
     }
 
-    this.craft.setEngine(this.throttle, this.elapsed);
+    // The CSM's own engine only burns for TLI and LOI.
+    this.craft.setEngine(this.phase === "lmDescent" ? 0 : this.throttle, this.elapsed);
     // A slow roll, as the real stack held for thermal control.
     if (this.phase === "cruise") this.craft.group.rotation.y += dt * 0.06;
     // The high-gain antenna keeps chasing Earth through that roll.
@@ -234,18 +274,144 @@ export default class CoastRuntime {
       this.logEvent("tliDone", `TLI cut-off at ${value.toFixed(0)} m/s — outbound for the Moon`);
       this.onBurnResult?.("tli", true);
     } else {
-      this.phase = "arrived";
-      this.status = "arrived";
+      // Captured. The arrival sequence plays before the hand-off.
+      this.phase = "orbit";
+      this.phaseTime = 0;
+      this.timeScale = 1;
       this.logEvent("loiDone", `Lunar orbit insertion complete at ${value.toFixed(0)} m/s`);
-      this.result = {
-        outcome: "arrived",
-        title: "In Lunar Orbit",
-        reason:
-          "The stack is in a stable lunar parking orbit. Undock the LM and take it down to the surface.",
-        stats: this._buildStats(),
-      };
       this.onBurnResult?.("loi", true);
     }
+  }
+
+  _arrive() {
+    if (this.result) return;
+    this.phase = "arrived";
+    this.status = "arrived";
+    this.engineOn = false;
+    this.throttle = 0;
+    this.result = {
+      outcome: "arrived",
+      title: "In Lunar Orbit",
+      reason:
+        "The stack is in a stable lunar parking orbit and the LM is on its way down. Take it to the surface.",
+      stats: this._buildStats(),
+    };
+  }
+
+  // -------------------------------------------------------------------------
+  // Arrival sequence (scripted)
+  // -------------------------------------------------------------------------
+
+  /** Settling into lunar orbit: the Moon swings beneath, the gear comes down. */
+  _updateOrbit(dt) {
+    void dt;
+    const T = this.mission.orbitSeconds;
+    const k = Math.min(1, this.phaseTime / T);
+    this.space.orbit = THREE.MathUtils.smoothstep(k, 0, 1);
+    // The crew deployed the LM's legs in lunar orbit, before undocking.
+    if (k > 0.35) {
+      this.logEvent("gear", "LM landing gear deployed");
+      this.craft.lander.setGearStowed(1 - THREE.MathUtils.smoothstep(k, 0.35, 0.95));
+    }
+    if (this.phaseTime >= T) {
+      this.phase = "undock";
+      this.phaseTime = 0;
+      this.logEvent("undock", "Undocking · the LM backs away from the command module");
+    }
+  }
+
+  /**
+   * Separation: the LM is released from the command module, backs clear on
+   * its RCS, and turns to put its descent engine toward the Moon.
+   */
+  _updateUndock(dt) {
+    const lm = this.craft.lander;
+    if (!this._lmUndocked) {
+      this._lmUndocked = true;
+      this.craft.lander.setGearStowed(false);
+      // Free the LM into the scene, keeping its exact world placement.
+      this.scene.attach(lm.group);
+      this._lmStart = lm.group.position.clone();
+      this._lmStartQuat = lm.group.quaternion.clone();
+      this._craftStart = this.craft.group.position.clone();
+      // The stack's long axis (the CSM's local +Y) in the world.
+      this._axis = new THREE.Vector3(0, 1, 0).applyQuaternion(this.craft.group.quaternion).normalize();
+      this.onUndock?.();
+    }
+
+    const T = this.mission.undockSeconds;
+    const k = Math.min(1, this.phaseTime / T);
+    // Back clear along the docking axis; the CSM drifts the other way.
+    const sep = THREE.MathUtils.smoothstep(k, 0, 0.55);
+    lm.group.position.copy(this._lmStart).addScaledVector(this._axis, sep * 14);
+    this.craft.group.position.copy(this._craftStart).addScaledVector(this._axis, -sep * 4);
+
+    // Then pitch round so the descent engine faces the Moon.
+    const turn = THREE.MathUtils.smoothstep(k, 0.4, 1);
+    const toMoon = this._v.copy(this.space.moonPosition).sub(lm.group.position).normalize();
+    const upStart = new THREE.Vector3(0, 1, 0).applyQuaternion(this._lmStartQuat);
+    const target = new THREE.Quaternion()
+      .setFromUnitVectors(upStart, toMoon.clone().negate())
+      .multiply(this._lmStartQuat);
+    lm.group.quaternion.copy(this._lmStartQuat).slerp(target, turn);
+
+    // RCS jets fire while it translates and turns.
+    const s = lm.state;
+    const thrusting = (k > 0.03 && k < 0.5) || (turn > 0.02 && turn < 0.98);
+    s.rcsFiring.set(thrusting ? 0.8 : 0, 0, thrusting ? 0.5 : 0);
+    s.engineOn = false;
+    s.throttle = 0;
+    lm.updateVisuals(dt, this.elapsed);
+
+    // Frame the pair while they separate, then settle onto the LM.
+    this._focus = this._focus ?? new THREE.Vector3();
+    this.craft.group.updateMatrixWorld();
+    const csm = this.craft.group.localToWorld(new THREE.Vector3(0, this.craft.height * 0.35, 0));
+    this.focus = this._focus.copy(csm).lerp(lm.group.position, THREE.MathUtils.lerp(0.5, 1, turn));
+    // Wide enough for both vehicles while they part, closing in on the LM.
+    this.focusDistance = THREE.MathUtils.lerp(58, 32, turn);
+    if (this.phaseTime >= T) {
+      this.phase = "lmDescent";
+      this.phaseTime = 0;
+      s.rcsFiring.set(0, 0, 0);
+      this.logEvent("doi", "Descent orbit insertion · the LM's engine lights");
+      this.onLmIgnition?.();
+    }
+  }
+
+  /** The LM's engine lights and it drops away toward the surface. */
+  _updateLmDescent(dt) {
+    const lm = this.craft.lander;
+    const T = this.mission.lmDescentSeconds;
+    const k = Math.min(1, this.phaseTime / T);
+
+    // Throttle up, then accelerate down toward the Moon; the CSM is left
+    // behind in orbit.
+    const s = lm.state;
+    s.engineOn = true;
+    s.throttle = THREE.MathUtils.lerp(0.1, 0.65, THREE.MathUtils.smoothstep(k, 0, 0.3));
+    this.throttle = s.throttle;
+    this.engineOn = true;
+    const toMoon = this._v.copy(this.space.moonPosition).sub(lm.group.position).normalize();
+    const speed = 2 + this.phaseTime * 7;
+    lm.group.position.addScaledVector(toMoon, speed * dt);
+    // Keep the engine pointed down as the Moon's direction drifts.
+    const up = new THREE.Vector3(0, 1, 0).applyQuaternion(lm.group.quaternion);
+    const correct = new THREE.Quaternion().setFromUnitVectors(up, toMoon.clone().negate());
+    lm.group.quaternion.premultiply(new THREE.Quaternion().slerp(correct, 0.1));
+    lm.updateVisuals(dt, this.elapsed);
+
+    // The surface rises to meet it.
+    this.space.approach = THREE.MathUtils.smoothstep(k, 0, 1);
+
+    if (this.particles) {
+      lm.group.updateMatrixWorld();
+      const nozzle = lm.group.localToWorld(new THREE.Vector3(0, lm.engineExitY, 0));
+      this.particles.updatePlume(nozzle, toMoon, s.throttle, 100, this.elapsed);
+    }
+
+    this.focus = lm.group.position;
+    if (this.phaseTime >= T) this._arrive();
   }
 
   _updateCruise(dt) {
@@ -310,6 +476,14 @@ export default class CoastRuntime {
 
   /** Skips the remainder of the crossing — it is a scripted sequence. */
   skipCruise() {
+    if (this.phase === "orbit" || this.phase === "undock" || this.phase === "lmDescent") {
+      // The arrival sequence is scripted too: jump to the hand-off.
+      this.craft.lander.setGearStowed(false);
+      this.space.orbit = 1;
+      this.space.approach = 1;
+      this._arrive();
+      return true;
+    }
     if (this.phase !== "cruise") return false;
     this.journey = 1;
     for (const m of this.mission.milestones) this._firedMilestones.add(m.at);

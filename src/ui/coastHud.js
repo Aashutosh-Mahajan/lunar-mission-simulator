@@ -11,7 +11,10 @@ const PHASE_LABELS = {
   tli: "Trans-Lunar Injection",
   cruise: "Trans-Lunar Coast",
   loi: "Lunar Orbit Insertion",
-  arrived: "Lunar Orbit",
+  orbit: "Lunar Orbit",
+  undock: "Undocking",
+  lmDescent: "LM Descent",
+  arrived: "LM Descent",
 };
 
 function el(id) {

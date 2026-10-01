@@ -594,27 +594,6 @@ function seam(ctx, W, y, alpha = 0.35) {
   ctx.fillRect(0, y - 1, W, 2);
 }
 
-/**
- * Vertical lettering, drawn with the canvas stretched to cancel the texture's
- * non-square texel aspect so the letters are the right shape on the stage.
- */
-function verticalText(ctx, text, cx, yTop, letterPx, spacingPx, aspect) {
-  ctx.save();
-  ctx.fillStyle = PAINT_BLACK;
-  ctx.font = `bold ${letterPx}px "Arial Black", Arial, sans-serif`;
-  ctx.textAlign = "center";
-  ctx.textBaseline = "top";
-  let y = yTop;
-  for (const ch of text) {
-    if (ch !== " ") {
-      ctx.setTransform(1 / aspect, 0, 0, 1, cx, y);
-      ctx.fillText(ch, 0, 0);
-    }
-    y += spacingPx;
-  }
-  ctx.restore();
-}
-
 /** US flag, `w` by `h` pixels in world proportion, top-left at (x, y). */
 function flag(ctx, x, y, w, h) {
   const stripe = h / 13;
@@ -652,7 +631,6 @@ export function buildSaturnLivery(stage, length, radius) {
   const Y = (h) => (1 - h / length) * H;
   const pxPerMu = W / circumference; // round the stage
   const pxPerMv = H / length; // up the stage
-  const aspect = pxPerMu / pxPerMv;
 
   if (stage === "sic") {
     // Corrugated skin on the thrust structure, intertank and forward skirt.
@@ -666,12 +644,10 @@ export function buildSaturnLivery(stage, length, radius) {
     // Tank weld lines.
     for (const h of [9.5, 13.5, 17.0, 27.5, 31.5, 35.0]) seam(ctx, W, Y(h), 0.12);
 
-    // "UNITED STATES" down two opposite sides, the flag above each.
-    const letter = 1.45 * pxPerMv;
+    // The flag on two opposite sides. (No lettering on the stage.)
     for (const u of [0.25, 0.75]) {
       const cx = u * W;
       flag(ctx, cx - 1.5 * pxPerMu, Y(37.2), 3.0 * pxPerMu, 1.95 * pxPerMv);
-      verticalText(ctx, "UNITED STATES", cx, Y(34.4), letter, 1.72 * pxPerMv, aspect);
     }
   } else if (stage === "sii") {
     // Interstage skirt at the bottom, the stage's forward skirt at the top.
@@ -697,7 +673,7 @@ export function buildSaturnLivery(stage, length, radius) {
 
 /**
  * Service module skin: bare aluminium with the white-painted radiator panels
- * that rejected the fuel cells' heat, and an "UNITED STATES" legend.
+ * that rejected the fuel cells' heat.
  */
 export function buildServiceModuleLivery(length = 3.9, radius = 1.96) {
   const W = 1024;
@@ -720,17 +696,6 @@ export function buildServiceModuleLivery(length = 3.9, radius = 1.96) {
   for (let k = 0; k < 6; k++) ctx.fillRect((k / 6) * W, 0, 2, H);
   ctx.fillRect(0, H * 0.1, W, 2);
   ctx.fillRect(0, H * 0.9, W, 2);
-  // Legend across one of the bare panels.
-  const pxPerMu = W / (Math.PI * 2 * radius);
-  const pxPerMv = H / length;
-  ctx.save();
-  ctx.fillStyle = PAINT_BLACK;
-  ctx.font = `bold ${Math.round(0.28 * pxPerMv)}px Arial, sans-serif`;
-  ctx.textAlign = "center";
-  ctx.textBaseline = "middle";
-  ctx.setTransform(pxPerMu / pxPerMv, 0, 0, 1, 0.425 * W, H * 0.5);
-  ctx.fillText("UNITED STATES", 0, 0);
-  ctx.restore();
   return liveryTexture(canvas);
 }
 

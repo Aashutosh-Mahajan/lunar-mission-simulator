@@ -300,6 +300,8 @@ export default class Spacecraft {
       if (o.geometry) o.geometry.dispose();
     });
     this.plumeMaterial.dispose();
+    // The LM may have been undocked into the scene, outside this group.
+    this.lander.dispose();
     this._smMaterial?.map?.dispose();
     this._smMaterial?.dispose();
   }

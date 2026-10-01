@@ -68,6 +68,9 @@ export default class Lander {
     };
 
     this._up = new THREE.Vector3();
+    // Also set by reset(); a display-only LM (docked to the CSM) never runs
+    // that, but still animates its gear and jets.
+    this.legCompression = [0, 0, 0, 0];
     this._buildModel();
     if (world) this._buildBody();
   }
@@ -307,20 +310,25 @@ export default class Lander {
    * inside the adapter and all the way to the Moon — the crew deployed it in
    * lunar orbit, before undocking. Each leg swings about its hinge on the
    * stage; the braces fold away inside that motion, so they are hidden.
-   * @param {boolean} stowed
+   * @param {boolean|number} stowed true/false, or 0 (deployed) .. 1 (stowed)
+   *   to animate the deployment
    */
   setGearStowed(stowed) {
+    const amount = typeof stowed === "number" ? THREE.MathUtils.clamp(stowed, 0, 1) : stowed ? 1 : 0;
     const up = new THREE.Vector3(0, 1, 0);
+    const identity = new THREE.Quaternion();
     for (const leg of this.legs) {
       const reach = leg.foot.clone().sub(leg.attach).normalize();
       // Folded almost upright, hugging the ascent stage.
       const target = leg.dir.clone().multiplyScalar(0.1).add(up).normalize();
-      const q = stowed ? new THREE.Quaternion().setFromUnitVectors(reach, target) : new THREE.Quaternion();
+      const folded = new THREE.Quaternion().setFromUnitVectors(reach, target);
+      const q = identity.clone().slerp(folded, amount);
       // Rotate about the hinge: position = attach - q * attach.
       leg.group.quaternion.copy(q);
       leg.group.position.copy(leg.attach).sub(leg.attach.clone().applyQuaternion(q));
-      for (const b of leg.braces) b.visible = !stowed;
-      if (leg.probe) leg.probe.visible = !stowed;
+      // The braces lock out only as the leg reaches the bottom of its swing.
+      for (const b of leg.braces) b.visible = amount < 0.08;
+      if (leg.probe) leg.probe.visible = amount < 0.08;
     }
     // The ladder is mounted on the forward leg's strut.
     if (this.ladder) {
@@ -328,7 +336,7 @@ export default class Lander {
       this.ladder.quaternion.copy(lead.quaternion);
       this.ladder.position.copy(lead.position);
     }
-    this.gearStowed = stowed;
+    this.gearStowed = amount > 0.5;
   }
 
   /** Builds a cylinder spanning two points (used for every strut). */
