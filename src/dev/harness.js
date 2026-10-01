@@ -15,6 +15,8 @@
 // person can.
 // ---------------------------------------------------------------------------
 
+import * as THREE from "three";
+
 const DT = 1 / 60;
 
 export function installHarness(game) {
@@ -176,5 +178,151 @@ export function installHarness(game) {
     return frames / 60;
   };
 
-  window.__harness = { descent, descentAll, ascent, format, advanceAscent, viewAscent, viewDescent, hold, runLoop };
+  /**
+   * Flies a descent with the crude pad-seeking pilot down to a given gear
+   * altitude, then holds the frame from the chosen camera — for comparing
+   * close-range ground, dust and plume rendering.
+   */
+  const approach = (levelId = 1, altitude = 9, { difficulty = "cadet", camera = "chase" } = {}) => {
+    game.settings.difficulty = difficulty;
+    game.startLevel(levelId);
+    const rt = game.runtime;
+    const view = { x: 0, z: 1 };
+    let t = 0;
+    while (!rt.result && t < 240 && rt.telemetry.gearAltitude > altitude) {
+      const c = game._neutralControls();
+      c.view = view;
+      const p = rt.lander.state.position;
+      const dx = rt.terrain.padCenter.x - p.x;
+      const dz = rt.terrain.padCenter.z - p.z;
+      c.pitch = Math.abs(dz) > 3 ? Math.sign(dz) : 0;
+      c.roll = Math.abs(dx) > 3 ? Math.sign(dx) : 0;
+      rt.update(DT, c);
+      game.particles.update(DT);
+      t += DT;
+    }
+    game.cameraRig.setMode(camera);
+    for (let i = 0; i < 200; i++) game.cameraRig.update(DT, rt.lander, rt.terrain, i * DT);
+    hold();
+    return { time: +t.toFixed(1), alt: +rt.telemetry.gearAltitude.toFixed(1) };
+  };
+
+  // Free camera: overrides whichever rig is active until released, so a frame
+  // can be composed from an arbitrary viewpoint. Positions are world space;
+  // `relative` offsets them from the current vehicle.
+  let freeCam = null;
+  const rigs = [game.cameraRig, game.ascentCamera, game.coastCamera].filter(Boolean);
+  for (const rig of rigs) {
+    const original = rig.update;
+    rig.update = function (...args) {
+      if (!freeCam) return original.apply(this, args);
+      const cam = game.camera;
+      cam.position.copy(freeCam.pos);
+      cam.up.set(0, 1, 0);
+      cam.lookAt(freeCam.look);
+      if (freeCam.fov && cam.fov !== freeCam.fov) {
+        cam.fov = freeCam.fov;
+        cam.updateProjectionMatrix();
+      }
+    };
+  }
+  const vehiclePosition = () =>
+    game.runtime?.lander.state.position.clone() ??
+    game.ascent?.vehicleWorldPosition?.clone() ??
+    new THREE.Vector3();
+  const freeCamera = (pos, look = [0, 0, 0], { fov = 50, relative = true } = {}) => {
+    const base = relative ? vehiclePosition() : new THREE.Vector3();
+    freeCam = {
+      pos: new THREE.Vector3(...pos).add(base),
+      look: new THREE.Vector3(...look).add(base),
+      fov,
+    };
+  };
+  const releaseCamera = () => {
+    freeCam = null;
+  };
+  /** Hides or restores the whole HUD/menu layer, for clean screenshots. */
+  const ui = (visible) => {
+    document.getElementById("ui-root").style.visibility = visible ? "" : "hidden";
+  };
+
+  /**
+   * Standard lighting check frames for a descent site: `down-sun` looks at
+   * the lit face of the vehicle with the sun behind the camera, `side` puts
+   * the terminator across it, and `up-sun` looks into the light.
+   */
+  const lightingShot = (levelId = 1, angle = "down-sun", { seconds = 3, distance = 22 } = {}) => {
+    ui(false);
+    viewDescent(levelId, seconds);
+    const s = game.environment.sunDirection;
+    const d = distance;
+    const at = {
+      "down-sun": [s.x * d + s.z * 8, 4, s.z * d - s.x * 8],
+      side: [-s.z * d, 3, s.x * d],
+      "up-sun": [-s.x * d, 3, -s.z * d],
+    }[angle];
+    freeCamera(at, [0, -1, 0]);
+  };
+
+  // --- GPU timing. Uses EXT_disjoint_timer_query_webgl2 to time one full
+  // composer frame on the GPU. Integrated GPUs change clock constantly, so a
+  // single number means little: `gpuAB` interleaves two configurations and
+  // compares them under the same conditions.
+  const gl = game.pipeline.renderer.getContext();
+  const timer = gl.getExtension("EXT_disjoint_timer_query_webgl2");
+  const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+  const timeFrame = async () => {
+    if (!timer) return NaN;
+    const q = gl.createQuery();
+    gl.beginQuery(timer.TIME_ELAPSED_EXT, q);
+    game.pipeline.composer.render(DT);
+    gl.endQuery(timer.TIME_ELAPSED_EXT);
+    await wait(30);
+    for (let i = 0; i < 60 && !gl.getQueryParameter(q, gl.QUERY_RESULT_AVAILABLE); i++) await wait(15);
+    const ms = gl.getQueryParameter(q, gl.QUERY_RESULT) / 1e6;
+    gl.deleteQuery(q);
+    return ms;
+  };
+  const stats = (xs) => {
+    const s = [...xs].sort((a, b) => a - b);
+    return { median: +s[s.length >> 1].toFixed(2), min: +s[0].toFixed(2) };
+  };
+  // The game's own frame loop is suspended while timing: it keeps the GPU
+  // busy (and hot) between samples, which is most of the noise.
+  const suspended = async (fn) => {
+    const raf = window.requestAnimationFrame;
+    window.requestAnimationFrame = () => 0;
+    await wait(50);
+    try {
+      return await fn();
+    } finally {
+      window.requestAnimationFrame = raf;
+      game.lastTime = performance.now();
+      requestAnimationFrame((t) => game.loop(t));
+    }
+  };
+  const gpuTime = (frames = 9) =>
+    suspended(async () => {
+      const xs = [];
+      for (let i = 0; i < frames; i++) xs.push(await timeFrame());
+      return stats(xs);
+    });
+  const gpuAB = (setA, setB, pairs = 10) =>
+    suspended(async () => {
+      const a = [];
+      const b = [];
+      for (let i = 0; i < pairs; i++) {
+        setA();
+        a.push(await timeFrame());
+        setB();
+        b.push(await timeFrame());
+      }
+      setA();
+      return { A: stats(a), B: stats(b) };
+    });
+
+  window.__harness = {
+    descent, descentAll, ascent, format, advanceAscent, viewAscent, viewDescent, hold, runLoop,
+    approach, freeCamera, releaseCamera, ui, lightingShot, gpuTime, gpuAB,
+  };
 }
