@@ -52,6 +52,9 @@ import { MAX_DT } from "./constants.js";
 // ---------------------------------------------------------------------------
 
 const RESULT_DELAY = 1.5; // seconds of watching the outcome before the debrief
+
+// Daylight white balance: the unfiltered sun, as on the Moon and in space.
+const NEUTRAL_BALANCE = new THREE.Color(1, 1, 1);
 // While watching the whole mission on autoplay, how long each debrief stays up
 // before the next phase starts by itself.
 const AUTOPLAY_CONTINUE_DELAY = 5;
@@ -130,10 +133,19 @@ class Game {
     const fill = document.getElementById("load-fill");
     const status = document.getElementById("load-status");
 
+    // Dev builds keep per-stage timings of the bake (window.__loadTimings).
+    const timings = [];
+    let stageStart = performance.now();
+    let stageName = "start";
     this.assets = await buildAssets((progress, message) => {
       fill.style.width = `${progress * 100}%`;
       status.textContent = message;
-    });
+      const now = performance.now();
+      timings.push([stageName, Math.round(now - stageStart)]);
+      stageStart = now;
+      stageName = message;
+    }, this.pipeline.renderer);
+    if (import.meta.env.DEV) window.__loadTimings = timings;
 
     this.world.addContactMaterial(this.assets.contactMaterial);
     // Scenes bake their own image-based lighting, which needs the renderer.
@@ -1054,6 +1066,7 @@ class Game {
     // all need different gain.
     const lit = this.coast?.space ?? this.ascent?.earth ?? this.environment;
     if (lit?.exposure) this.pipeline.setSceneExposure(lit.exposure, dt);
+    this.pipeline.setWhiteBalance(lit?.whiteBalance ?? NEUTRAL_BALANCE, dt);
     this.pipeline.render(dt, this.elapsed, raw);
   }
 

@@ -1,165 +1,322 @@
 import * as THREE from "three";
 import { makeRng } from "../materials/noise.js";
-import { buildSunSprite } from "../materials/textures.js";
-import { ASCENT_MISSION, airDensity } from "../levels/ascentConfig.js";
+import { createSun } from "../materials/sun.js";
+import { EnvironmentProbe } from "../materials/environmentMaps.js";
+import { FullScreenQuad } from "three/addons/postprocessing/Pass.js";
+import { ATMOSPHERE_GLSL, R_GROUND, sunTransmittance, skyRadiance } from "../materials/atmosphere.js";
+import { ASCENT_MISSION } from "../levels/ascentConfig.js";
+import { SUN_COLOR, SUN_INTENSITY } from "../constants.js";
 
 // ---------------------------------------------------------------------------
 // The sky above Cape Canaveral, from the pad to orbit.
 //
-// The hard part of an ascent scene is scale: the vehicle climbs 185 km, and a
-// literal Earth of radius 6371 km will not fit in a depth buffer alongside a
-// 110 m rocket. The trick used here is that the *horizon dip angle* only
-// depends on the ratio h/R — so the Earth is drawn at 1/2000 scale with the
-// camera's altitude scaled by the same factor. The curvature and the horizon
-// position are then geometrically exact at every altitude, while everything
-// stays inside a small far plane.
+// Everything beyond the launch complex — the air, the cloud deck, the curved
+// Earth below — is one shader on a sky sphere, ray-marched through a
+// physically based atmosphere (materials/atmosphere.js) against a true-scale
+// spherical planet.
 //
-// The globe is drawn behind everything (no depth write, low render order), so
-// the real-scale launch complex and terrain simply overlay it near the ground.
+// That replaces an older trick of drawing a 1/2000-scale globe with the
+// camera's altitude scaled to match. The trick got the horizon dip right but
+// nothing else: the sky was a gradient keyed on altitude, the haze a painted
+// rim. Done analytically in the shader there is no depth-buffer problem at
+// all (the sphere is background, so its size never meets the depth range),
+// and the horizon dip, the limb, the aerial perspective and the darkening of
+// the sky with height all fall out of the same few constants.
+//
+// The same model is baked into an environment probe for image-based
+// lighting, and evaluated on the CPU for the sun's colour and the ground's
+// haze, so the vehicle is lit by the sky the player can see.
 // ---------------------------------------------------------------------------
 
-const GLOBE_SCALE = 1 / 2000;
-const EARTH_RADIUS = 6371000; // m
-const GLOBE_RADIUS = EARTH_RADIUS * GLOBE_SCALE; // ≈ 3185 render units
 const SKY_RADIUS = 9000;
 const STAR_COUNT = 6000;
+const CAPE_EXTENT_KM = 26; // the baked Cape map (see textures.js)
+const CLOUD_BASE_KM = 1.6; // fair-weather cumulus over Florida
+const CLOUD_TOP_KM = 2.6;
 
-// Sky colour as a function of altitude. Real values: a deep blue zenith at sea
-// level, indigo through the stratosphere, black above roughly 60 km.
-const SKY_STOPS = [
-  { alt: 0, zenith: 0x2f6ab8, horizon: 0xbcd6ee },
-  { alt: 6000, zenith: 0x1c4a92, horizon: 0x93b8dc },
-  { alt: 14000, zenith: 0x0d2a63, horizon: 0x5b86bb },
-  { alt: 26000, zenith: 0x04123a, horizon: 0x27508c },
-  { alt: 45000, zenith: 0x010720, horizon: 0x0d2450 },
-  { alt: 70000, zenith: 0x000208, horizon: 0x030e22 },
-  { alt: 110000, zenith: 0x000000, horizon: 0x000306 },
-];
+// Planet surface, in km about the pad (x east, z south). The Cape map covers
+// the first 13 km; beyond it, Florida's Atlantic coast runs north-south a
+// kilometre east of the pad, with scrub and lagoons inland and ocean
+// offshore — which is the view down the launch azimuth.
+const surfaceGLSL = /* glsl */ `
+  uniform sampler2D capeMap;
+  uniform sampler2D noiseTex;   // tileable fbm, four fields (textures.js)
+  uniform float time;
+  uniform float cloudCover;
 
-function lerpStops(altitude) {
-  if (altitude <= SKY_STOPS[0].alt) return SKY_STOPS[0];
-  const last = SKY_STOPS[SKY_STOPS.length - 1];
-  if (altitude >= last.alt) return last;
-  for (let i = 0; i < SKY_STOPS.length - 1; i++) {
-    const a = SKY_STOPS[i];
-    const b = SKY_STOPS[i + 1];
-    if (altitude >= a.alt && altitude <= b.alt) {
-      const t = (altitude - a.alt) / (b.alt - a.alt);
-      return {
-        zenith: new THREE.Color(a.zenith).lerp(new THREE.Color(b.zenith), t),
-        horizon: new THREE.Color(a.horizon).lerp(new THREE.Color(b.horizon), t),
-      };
-    }
+  // One mipmapped fetch per field instead of evaluating fbm per pixel. The
+  // texture's base octave has four cells per tile, so p * 0.25 samples it
+  // at one cell per unit of p.
+  vec4 esNoise(vec2 p) {
+    return texture2D(noiseTex, p * 0.25);
   }
-  return last;
-}
 
-const skyVertex = /* glsl */ `
-  varying vec3 vWorld;
+  // Linear albedo of the surface at pad-relative (east, south) km.
+  vec3 surfaceAlbedo(vec2 xz, out float water) {
+    float coast = 1.1 + 0.65 * sin(xz.y * 0.35) + (esNoise(vec2(xz.y * 0.4, 3.3)).r - 0.5) * 0.76;
+    // Far from the pad the coast is the large-scale shape of the peninsula:
+    // it bends gently west going south.
+    coast -= max(xz.y, 0.0) * 0.08;
+    float sea = xz.x - coast;
+    water = smoothstep(-0.05, 0.05, sea);
+    float depth = clamp(sea / 30.0, 0.0, 1.0);
+    // Shallows over the shelf are greener; deep Atlantic is ink blue.
+    vec3 ocean = mix(vec3(0.018, 0.05, 0.06), vec3(0.008, 0.022, 0.05), depth);
+
+    float veg = esNoise(xz * 0.9).r;
+    float marsh = smoothstep(0.58, 0.66, esNoise(xz * 0.25 + 7.0).g);
+    vec3 land = mix(vec3(0.045, 0.06, 0.03), vec3(0.09, 0.085, 0.05), veg);
+    land = mix(land, vec3(0.02, 0.04, 0.045), marsh);
+    vec3 col = mix(land, ocean, water);
+
+    // Inside the baked map, use it: it is what the launch complex's own
+    // ground plane shows, so the two meet without a seam.
+    vec2 uv = vec2(xz.x / ${CAPE_EXTENT_KM.toFixed(1)} + 0.5, 0.5 - xz.y / ${CAPE_EXTENT_KM.toFixed(1)});
+    vec2 edge = abs(uv - 0.5);
+    float inside = 1.0 - smoothstep(0.42, 0.5, max(edge.x, edge.y));
+    if (inside > 0.0) {
+      vec3 cape = texture2D(capeMap, uv).rgb;
+      col = mix(col, cape, inside);
+      // The map's water is the only blue-dominant surface on it.
+      float capeWater = smoothstep(1.1, 1.5, cape.b / max(cape.r, 1e-3));
+      water = mix(water, capeWater, inside);
+    }
+    return col;
+  }
+
+  // Fair-weather cumulus coverage at pad-relative km, 0..1. 'footprint' is
+  // the size of a pixel on the deck, in km.
+  float cloudDensity(vec2 xz, float footprint) {
+    // Weather: cumulus forms in fields and streets tens of kilometres
+    // across, with clear lanes between — not as uniform confetti.
+    float weather = esNoise(xz * 0.018 + vec2(3.0, 11.0)).b;
+    float cover = clamp(cloudCover * smoothstep(0.3, 0.62, weather) * 1.7, 0.0, 0.85);
+    if (cover < 0.005) return 0.0;
+    // Individual cells, a few kilometres across, drifting on the trades.
+    vec2 p = xz * 0.21 + vec2(time * 0.004, time * 0.0015);
+    float cells = esNoise(p).a;
+    float c = smoothstep(1.0 - cover, 1.0 - cover + 0.22, cells);
+    // Where a cell is smaller than a pixel, thresholded noise only aliases
+    // into glitter; use the mean coverage the field would average to.
+    float far = smoothstep(0.6, 3.0, footprint);
+    return mix(c, cover * 0.55, far);
+  }
+`;
+
+// ---------------------------------------------------------------------------
+// Sky-view LUT (after Hillaire, "A Scalable and Production Ready Sky and
+// Atmosphere Rendering Technique", 2020).
+//
+// Marching the atmosphere for every pixel cost ~9 ms a frame on integrated
+// graphics with the sky filling the screen. But the in-scattered light only
+// depends on the view's zenith angle and its azimuth from the sun, and it
+// varies smoothly in both — so it is marched once per frame into a small
+// texture and looked up per pixel. Rows are spaced so most of them sit near
+// the horizon, where the sky changes fastest and the planet's edge must stay
+// sharp. Clouds and the surface, which carry real detail, stay per pixel.
+// ---------------------------------------------------------------------------
+
+const LUT_WIDTH = 192;
+const LUT_HEIGHT = 128;
+
+const lutMappingGLSL = /* glsl */ `
+  uniform float horizonAngle;   // zenith angle of the geometric horizon, rad
+
+  vec2 skyLutUv(vec3 dir, vec3 sunDir) {
+    float theta = acos(clamp(dir.y, -1.0, 1.0));
+    float v;
+    if (theta < horizonAngle) {
+      float c = theta / horizonAngle;
+      v = (1.0 - sqrt(max(1.0 - c, 0.0))) * 0.5;
+    } else {
+      float c = (theta - horizonAngle) / (ATM_PI - horizonAngle);
+      v = 0.5 + 0.5 * sqrt(max(c, 0.0));
+    }
+    vec2 hd = dir.xz;
+    float lh = length(hd);
+    vec2 hs = normalize(sunDir.xz + vec2(1e-6, 0.0));
+    float cosPhi = lh > 1e-5 ? dot(hd / lh, hs) : 1.0;
+    float u = acos(clamp(cosPhi, -1.0, 1.0)) / ATM_PI;
+    return vec2(u, v);
+  }
+`;
+
+const lutVertex = /* glsl */ `
+  varying vec2 vUv;
   void main() {
-    vWorld = normalize(position);
+    vUv = uv;
+    gl_Position = vec4(position.xy, 0.0, 1.0);
+  }
+`;
+
+const lutFragment = /* glsl */ `
+  ${ATMOSPHERE_GLSL}
+  uniform float camHeight;
+  uniform float sunElevation;
+  uniform float horizonAngle;
+  uniform int lutMode;          // 0 in-scatter, 1 transmittance
+  varying vec2 vUv;
+  void main() {
+    // Inverse of skyLutUv.
+    float theta;
+    if (vUv.y < 0.5) {
+      float c2 = 1.0 - vUv.y * 2.0;
+      theta = (1.0 - c2 * c2) * horizonAngle;
+    } else {
+      float c = vUv.y * 2.0 - 1.0;
+      theta = horizonAngle + c * c * (ATM_PI - horizonAngle);
+    }
+    float phi = vUv.x * ATM_PI;
+    vec3 dir = vec3(sin(theta) * cos(phi), cos(theta), sin(theta) * sin(phi));
+    vec3 sunDir = vec3(cos(sunElevation), sin(sunElevation), 0.0);
+    float h0 = max(camHeight, 0.002);
+    vec2 ground = atmShell(h0, dir.y, 0.0);
+    float tEnd = ground.x > 0.0 ? ground.x : 1e9;
+    vec3 T;
+    vec3 L = atmInScatter(h0, dir, sunDir, tEnd, 24, T);
+    gl_FragColor = lutMode == 0 ? vec4(L, 1.0) : vec4(T, 1.0);
+  }
+`;
+
+// The shared sky function. 'SKY_FULL' adds the cloud deck and surface
+// textures; the lighting probe uses the plain version.
+const skyGLSL = /* glsl */ `
+  uniform float camHeight;      // km
+  uniform vec3 sunDirection;
+  uniform float sunIrradiance;
+  uniform float downrange;      // km east of the pad
+  uniform sampler2D skyInScatter;
+  uniform sampler2D skyTransmittance;
+  ${lutMappingGLSL}
+
+  // Planet-local direction to pad-relative surface coordinates (km).
+  vec2 surfaceCoords(vec3 p) {
+    // p is relative to the planet centre in the observer's frame; the
+    // observer is 'downrange' km east of the pad.
+    float east = atan(p.x, p.y) * ATM_R + downrange;
+    float south = atan(p.z, p.y) * ATM_R;
+    return vec2(east, south);
+  }
+
+  vec3 skyRadiance(vec3 dir) {
+    float h0 = max(camHeight, 0.002);
+    float mu = dir.y;
+    vec3 obs = vec3(0.0, ATM_R + h0, 0.0);
+
+    vec2 ground = atmShell(h0, mu, 0.0);
+    bool hitsGround = ground.x > 0.0;
+    float tEnd = hitsGround ? ground.x : 1e9;
+
+    vec2 lutUv = skyLutUv(dir, sunDirection);
+    vec3 L = texture2D(skyInScatter, lutUv).rgb * sunIrradiance;
+    vec3 T = texture2D(skyTransmittance, lutUv).rgb;
+
+    vec3 surface = vec3(0.0);
+    float water = 0.0;
+    if (hitsGround) {
+      vec3 p = obs + dir * tEnd;
+      vec3 n = normalize(p);
+      float cosSun = dot(n, sunDirection);
+      vec3 sunT = atmSunTransmittance(0.0, cosSun);
+      #ifdef SKY_FULL
+        vec3 albedo = surfaceAlbedo(surfaceCoords(p), water);
+      #else
+        vec3 albedo = vec3(0.03, 0.045, 0.055);
+        water = 0.6;
+      #endif
+      // Direct sun plus skylight (roughly a fifth of the direct at this
+      // elevation, and blue).
+      vec3 irradiance = sunIrradiance * (sunT * max(cosSun, 0.0) +
+        vec3(0.06, 0.09, 0.14) * smoothstep(-0.1, 0.3, cosSun));
+      surface = albedo * irradiance / ATM_PI;
+      // Sun glint off the ocean: the bright smear seen from orbit.
+      vec3 refl = reflect(-sunDirection, n);
+      float glint = pow(max(dot(refl, -dir), 0.0), 180.0);
+      surface += water * glint * sunT * sunIrradiance * 0.35 * max(cosSun, 0.0);
+    }
+
+    vec3 result = L + T * surface;
+
+    #ifdef SKY_FULL
+      // Cumulus deck. The LUT cannot split the in-scatter at the cloud, so
+      // it is apportioned by distance through the (mostly low) air.
+      vec2 shell = atmShell(h0, mu, ${CLOUD_BASE_KM.toFixed(2)});
+      float tCloud = h0 > ${CLOUD_BASE_KM.toFixed(2)} ? shell.x : shell.y;
+      // Derivatives must be taken outside the branch.
+      vec3 pc = obs + dir * max(tCloud, 0.0);
+      vec2 cxz = surfaceCoords(pc);
+      float footprint = length(fwidth(cxz));
+      if (tCloud > 0.0 && tCloud < tEnd) {
+        float density = cloudDensity(cxz, footprint);
+        // Seen nearly edge-on the deck closes up into a solid layer.
+        float slant = clamp(abs(mu) * 6.0 + 0.15, 0.0, 1.0);
+        float alpha = clamp(density * (1.6 - slant * 0.6), 0.0, 1.0);
+        if (alpha > 0.002) {
+          vec3 nc = normalize(pc);
+          float cosSun = dot(nc, sunDirection);
+          vec3 sunT = atmSunTransmittance(${CLOUD_BASE_KM.toFixed(2)}, cosSun);
+          // Lit tops from above; grey, self-shadowed bases from below.
+          float fromAbove = step(${CLOUD_BASE_KM.toFixed(2)}, h0);
+          float lit = mix(0.42, 0.95, fromAbove) * (0.8 + 0.2 * density);
+          // A cloud is thousands of scattering events deep: it whitens the
+          // light that reaches it, rather than passing on the sun's tint.
+          vec3 sunCol = mix(sunT, vec3(dot(sunT, vec3(0.2126, 0.7152, 0.0722))), 0.6);
+          vec3 cloud = sunIrradiance * (sunCol * max(cosSun, 0.0) * lit + vec3(0.05, 0.065, 0.09)) * 0.8 / ATM_PI;
+          float frac = clamp(1.0 - exp(-tCloud / 9.0), 0.0, 1.0);
+          vec3 front = L * frac;
+          vec3 Tc = mix(vec3(1.0), T, frac);
+          result = mix(result, front + Tc * cloud, alpha);
+        }
+      }
+    #endif
+
+    return result;
+  }
+`;
+
+// Drawn at the far plane (z = w): the dome is at infinity, so it is depth-
+// tested against everything opaque and only shades the pixels nothing else
+// covers.
+const skyVertex = /* glsl */ `
+  varying vec3 vDir;
+  void main() {
+    vDir = normalize(position);
     gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+    gl_Position.z = gl_Position.w;
   }
 `;
 
 const skyFragment = /* glsl */ `
-  uniform vec3 zenithColor;
-  uniform vec3 horizonColor;
-  uniform vec3 sunDirection;
-  uniform float sunGlow;
-  varying vec3 vWorld;
-
+  #define SKY_FULL
+  ${ATMOSPHERE_GLSL}
+  ${surfaceGLSL}
+  ${skyGLSL}
+  varying vec3 vDir;
   void main() {
-    // Gradient is biased toward the horizon, as real atmospheric scattering is.
-    float t = pow(clamp(vWorld.y, 0.0, 1.0), 0.42);
-    vec3 col = mix(horizonColor, zenithColor, t);
-
-    // Forward-scattering halo around the sun, only while there is air.
-    float sunDot = max(dot(normalize(vWorld), normalize(sunDirection)), 0.0);
-    col += horizonColor * pow(sunDot, 8.0) * sunGlow * 1.4;
-    col += vec3(1.0, 0.86, 0.66) * pow(sunDot, 220.0) * sunGlow;
-
-    // Below the horizon fades to nothing so the ground can take over.
-    float below = smoothstep(-0.06, 0.02, vWorld.y);
-    gl_FragColor = vec4(col, below);
+    gl_FragColor = vec4(skyRadiance(normalize(vDir)), 1.0);
   }
 `;
 
-const globeVertex = /* glsl */ `
-  varying vec3 vNormal;
-  varying vec3 vWorldPos;
+const probeFragment = /* glsl */ `
+  ${ATMOSPHERE_GLSL}
+  ${skyGLSL}
+  varying vec3 vDir;
   void main() {
-    vNormal = normalize(normalMatrix * normal);
-    vec4 mv = modelViewMatrix * vec4(position, 1.0);
-    vWorldPos = mv.xyz;
-    gl_Position = projectionMatrix * mv;
+    gl_FragColor = vec4(skyRadiance(normalize(vDir)), 1.0);
   }
 `;
 
-const globeFragment = /* glsl */ `
-  uniform vec3 landColor;
-  uniform vec3 oceanColor;
-  uniform vec3 hazeColor;
-  uniform float opacity;
-  uniform vec3 sunDirection;
-  varying vec3 vNormal;
-  varying vec3 vWorldPos;
-
-  float hash(vec2 p) {
-    vec3 p3 = fract(vec3(p.xyx) * 0.1031);
-    p3 += dot(p3, p3.yzx + 33.33);
-    return fract((p3.x + p3.y) * p3.z);
-  }
-
-  float noise(vec2 p) {
-    vec2 i = floor(p), f = fract(p);
-    f = f * f * (3.0 - 2.0 * f);
-    return mix(mix(hash(i), hash(i + vec2(1.0, 0.0)), f.x),
-               mix(hash(i + vec2(0.0, 1.0)), hash(i + vec2(1.0, 1.0)), f.x), f.y);
-  }
-
-  void main() {
-    vec3 n = normalize(vNormal);
-    // Coarse continents; at the scale this is seen (a limb far below) only
-    // the large-scale land/sea contrast reads.
-    float c = noise(n.xz * 5.0 + 2.0) * 0.6 + noise(n.xy * 9.0) * 0.4;
-    vec3 base = mix(oceanColor, landColor, smoothstep(0.52, 0.62, c));
-
-    // Cloud decks.
-    float cloud = smoothstep(0.55, 0.78, noise(n.xz * 13.0 + 7.0) * 0.6 + noise(n.zy * 21.0) * 0.4);
-    base = mix(base, vec3(0.92, 0.94, 0.97), cloud * 0.75);
-
-    // Day/night terminator.
-    float lit = clamp(dot(n, normalize(sunDirection)) * 1.6 + 0.35, 0.03, 1.0);
-    base *= lit;
-
-    // Atmospheric haze thickens toward the limb.
-    float limb = 1.0 - abs(dot(n, normalize(-vWorldPos)));
-    base = mix(base, hazeColor, pow(clamp(limb, 0.0, 1.0), 2.2) * 0.85);
-
-    gl_FragColor = vec4(base, opacity);
-  }
-`;
-
-const limbFragment = /* glsl */ `
-  uniform vec3 glowColor;
-  uniform float opacity;
-  uniform vec3 sunDirection;
-  varying vec3 vNormal;
-  varying vec3 vWorldPos;
-  void main() {
-    vec3 n = normalize(vNormal);
-    float rim = 1.0 - abs(dot(n, normalize(-vWorldPos)));
-    rim = pow(clamp(rim, 0.0, 1.0), 3.0);
-    float lit = clamp(dot(n, normalize(sunDirection)) * 0.6 + 0.5, 0.0, 1.0);
-    gl_FragColor = vec4(glowColor, rim * lit * opacity);
-  }
-`;
+// Distance (km of altitude) the camera must move before the lighting probe is
+// re-baked. Small low down, where the sky changes fastest.
+function probeStep(hKm) {
+  return Math.max(0.25, hKm * 0.08);
+}
 
 export default class EarthScene {
-  constructor(scene, mission = ASCENT_MISSION) {
+  constructor(scene, mission = ASCENT_MISSION, assets = null) {
     this.scene = scene;
     this.mission = mission;
+    this.assets = assets;
 
     this.group = new THREE.Group();
     this.group.name = "earthSky";
@@ -175,35 +332,109 @@ export default class EarthScene {
       Math.cos(el) * Math.sin(az)
     ).normalize();
 
+    this.cameraAltitude = 0;
+    this.downrangeKm = 0;
+    /** The launch complex, which takes its haze and light from this sky. */
+    this.ground = null;
+    this._sunT = new THREE.Color();
+    this.hazeColor = new THREE.Color();
+    /** Camera white balance for this light (see RenderPipeline). */
+    this.whiteBalance = new THREE.Color(1, 1, 1);
+    this.groundLight = new THREE.Color();
+
+    this._buildSkyLut();
     this._buildSkyDome();
     this._buildStars();
     this._buildSun();
-    this._buildGlobe();
     this._buildLights();
+    this._buildProbe();
 
-    scene.background = new THREE.Color(0x0b1c33);
+    scene.background = new THREE.Color(0x000000);
 
-    /** Photographic exposure: a sunlit white vehicle under a blue sky. */
-    this.exposure = 1.0;
+    // Exposure for a sunlit white vehicle under a blue sky. The sun is the
+    // same top-of-atmosphere irradiance as on the Moon; the air takes a
+    // little off it and the sky adds a lot of fill, so slightly less gain.
+    this.exposure = 1.25;
+    this.update(null, 0, null, 0);
+  }
+
+  /** The two sky-view LUTs and the full-screen pass that fills them. */
+  _buildSkyLut() {
+    const opts = {
+      type: THREE.HalfFloatType,
+      depthBuffer: false,
+      minFilter: THREE.LinearFilter,
+      magFilter: THREE.LinearFilter,
+      wrapS: THREE.ClampToEdgeWrapping,
+      wrapT: THREE.ClampToEdgeWrapping,
+      generateMipmaps: false,
+    };
+    this.lutInScatter = new THREE.WebGLRenderTarget(LUT_WIDTH, LUT_HEIGHT, opts);
+    this.lutTransmittance = new THREE.WebGLRenderTarget(LUT_WIDTH, LUT_HEIGHT, opts);
+    this.lutMaterial = new THREE.ShaderMaterial({
+      uniforms: {
+        camHeight: { value: 0 },
+        sunElevation: { value: Math.asin(this.sunDirection.y) },
+        horizonAngle: { value: Math.PI / 2 },
+        lutMode: { value: 0 },
+      },
+      vertexShader: lutVertex,
+      fragmentShader: lutFragment,
+      depthTest: false,
+      depthWrite: false,
+    });
+    this.lutQuad = new FullScreenQuad(this.lutMaterial);
+    this._lutHeight = -1;
+  }
+
+  /** Re-marches the atmosphere into the LUTs for the camera's height. */
+  _renderSkyLut(hKm) {
+    const renderer = this.assets?.renderer;
+    if (!renderer) return;
+    // Nothing to redo while the camera holds its height (on the pad, in a
+    // paused frame); below a metre the change is invisible.
+    if (Math.abs(hKm - this._lutHeight) < 0.001) return;
+    this._lutHeight = hKm;
+
+    const u = this.lutMaterial.uniforms;
+    u.camHeight.value = hKm;
+    u.horizonAngle.value = this.horizonAngle;
+    const previous = renderer.getRenderTarget();
+    u.lutMode.value = 0;
+    renderer.setRenderTarget(this.lutInScatter);
+    this.lutQuad.render(renderer);
+    u.lutMode.value = 1;
+    renderer.setRenderTarget(this.lutTransmittance);
+    this.lutQuad.render(renderer);
+    renderer.setRenderTarget(previous);
   }
 
   _buildSkyDome() {
-    const geo = new THREE.SphereGeometry(SKY_RADIUS * 0.96, 40, 28);
+    const geo = new THREE.SphereGeometry(SKY_RADIUS * 0.96, 64, 40);
     this.skyMaterial = new THREE.ShaderMaterial({
       uniforms: {
-        zenithColor: { value: new THREE.Color(SKY_STOPS[0].zenith) },
-        horizonColor: { value: new THREE.Color(SKY_STOPS[0].horizon) },
+        camHeight: { value: 0 },
         sunDirection: { value: this.sunDirection.clone() },
-        sunGlow: { value: 1 },
+        sunIrradiance: { value: SUN_INTENSITY },
+        downrange: { value: 0 },
+        horizonAngle: { value: Math.PI / 2 },
+        skyInScatter: { value: this.lutInScatter.texture },
+        skyTransmittance: { value: this.lutTransmittance.texture },
+        capeMap: { value: this.assets?.capeGround ?? null },
+        noiseTex: { value: this.assets?.noise ?? null },
+        time: { value: 0 },
+        cloudCover: { value: 0.36 },
       },
       vertexShader: skyVertex,
       fragmentShader: skyFragment,
       side: THREE.BackSide,
       depthWrite: false,
-      transparent: true,
     });
     this.sky = new THREE.Mesh(geo, this.skyMaterial);
-    this.sky.renderOrder = -200;
+    // After the rest of the opaque pass, so its pixels are already covered
+    // wherever the vehicle and the pad are (see skyVertex).
+    this.sky.renderOrder = 1000;
+    this.sky.frustumCulled = false;
     this.group.add(this.sky);
   }
 
@@ -276,78 +507,15 @@ export default class EarthScene {
   }
 
   _buildSun() {
-    const sprite = buildSunSprite();
     const dist = SKY_RADIUS * 0.9;
-    this.sunSprite = new THREE.Sprite(
-      new THREE.SpriteMaterial({
-        map: sprite,
-        blending: THREE.AdditiveBlending,
-        depthWrite: false,
-        depthTest: false,
-        transparent: true,
-      })
-    );
-    this.sunSprite.scale.setScalar(dist * 0.03);
-    this.sunSprite.position.copy(this.sunDirection).multiplyScalar(dist);
-    this.sunSprite.renderOrder = -150;
-    this.group.add(this.sunSprite);
-  }
-
-  /**
-   * The scaled Earth. Fades in as the local terrain loses meaning, and is
-   * always drawn behind everything else.
-   */
-  _buildGlobe() {
-    this.globeGroup = new THREE.Group();
-    this.group.add(this.globeGroup);
-
-    this.globeMaterial = new THREE.ShaderMaterial({
-      uniforms: {
-        landColor: { value: new THREE.Color(0x4a5c3a) },
-        oceanColor: { value: new THREE.Color(0x14355e) },
-        hazeColor: { value: new THREE.Color(0x86b4e8) },
-        sunDirection: { value: this.sunDirection.clone() },
-        opacity: { value: 0 },
-      },
-      vertexShader: globeVertex,
-      fragmentShader: globeFragment,
-      transparent: true,
-      depthWrite: false,
-      side: THREE.FrontSide,
-    });
-
-    this.globe = new THREE.Mesh(
-      new THREE.SphereGeometry(GLOBE_RADIUS, 96, 64),
-      this.globeMaterial
-    );
-    this.globe.renderOrder = -180;
-    this.globeGroup.add(this.globe);
-
-    // Atmospheric limb: the bright blue arc along the edge of the planet.
-    this.limbMaterial = new THREE.ShaderMaterial({
-      uniforms: {
-        glowColor: { value: new THREE.Color(0x6cb4ff) },
-        sunDirection: { value: this.sunDirection.clone() },
-        opacity: { value: 0 },
-      },
-      vertexShader: globeVertex,
-      fragmentShader: limbFragment,
-      transparent: true,
-      depthWrite: false,
-      blending: THREE.AdditiveBlending,
-      side: THREE.BackSide,
-    });
-    // Atmosphere is ~100 km deep; at globe scale that is a thin shell.
-    this.limb = new THREE.Mesh(
-      new THREE.SphereGeometry(GLOBE_RADIUS * 1.016, 96, 64),
-      this.limbMaterial
-    );
-    this.limb.renderOrder = -179;
-    this.globeGroup.add(this.limb);
+    this.sun = createSun(dist, { depthTest: true });
+    this.sun.group.position.copy(this.sunDirection).multiplyScalar(dist);
+    this.sun.group.renderOrder = -150;
+    this.group.add(this.sun.group);
   }
 
   _buildLights() {
-    this.sunLight = new THREE.DirectionalLight(0xfff4e2, 3.0);
+    this.sunLight = new THREE.DirectionalLight(SUN_COLOR, SUN_INTENSITY);
     this.sunLight.castShadow = true;
     this.sunLight.shadow.mapSize.set(2048, 2048);
     this.sunLight.shadow.camera.near = 1;
@@ -361,66 +529,117 @@ export default class EarthScene {
     this.sunLight.shadow.camera.bottom = -extent;
     this.scene.add(this.sunLight);
     this.scene.add(this.sunLight.target);
+  }
 
-    // On Earth the sky itself is a huge blue fill light — quite unlike the
-    // Moon, where shadows are nearly black.
-    this.ambient = new THREE.HemisphereLight(0x94bde8, 0x54514a, 1.5);
-    this.scene.add(this.ambient);
+  /** Image-based lighting from the same atmosphere the player sees. */
+  _buildProbe() {
+    this.probe = null;
+    const renderer = this.assets?.renderer;
+    if (!renderer) return;
+    this.probe = new EnvironmentProbe(
+      renderer,
+      probeFragment,
+      {
+        camHeight: { value: 0 },
+        sunDirection: { value: this.sunDirection.clone() },
+        sunIrradiance: { value: SUN_INTENSITY },
+        downrange: { value: 0 },
+        horizonAngle: { value: Math.PI / 2 },
+        skyInScatter: { value: this.lutInScatter.texture },
+        skyTransmittance: { value: this.lutTransmittance.texture },
+      },
+      64
+    );
+    this._probeAltitude = -Infinity;
+  }
+
+  _bakeProbe(hKm) {
+    if (!this.probe) return;
+    this.probe.uniforms.camHeight.value = hKm;
+    this.scene.environment = this.probe.bake();
+    this._probeAltitude = hKm;
   }
 
   /**
-   * @param {THREE.Camera} camera
-   * @param {number} altitude metres above the pad
-   * @param {THREE.Vector3} focus what the shadow frustum should follow
+   * @param {THREE.Camera|null} camera
+   * @param {number} altitude vehicle altitude, metres (kept for callers;
+   *   the sky itself is computed from the camera's height)
+   * @param {THREE.Vector3|null} focus what the shadow frustum should follow;
+   *   its x is the vehicle's downrange distance
    */
   update(camera, altitude, focus, dt) {
-    this.group.position.copy(camera.position);
+    if (camera) this.group.position.copy(camera.position);
+    const camY = camera ? camera.position.y : Math.max(altitude, 2);
+    const hKm = Math.max(camY, 2) / 1000;
+    this.cameraAltitude = camY;
+    const downrangeKm = (camera ? camera.position.x : focus?.x ?? 0) / 1000;
+    this.downrangeKm = downrangeKm;
 
-    // --- Sky colour and sun halo -----------------------------------------
-    const stops = lerpStops(altitude);
-    this.skyMaterial.uniforms.zenithColor.value.copy(
-      stops.zenith instanceof THREE.Color ? stops.zenith : new THREE.Color(stops.zenith)
-    );
-    this.skyMaterial.uniforms.horizonColor.value.copy(
-      stops.horizon instanceof THREE.Color ? stops.horizon : new THREE.Color(stops.horizon)
-    );
-    // The halo is scattering, so it fades with the air that causes it.
-    const densityRatio = airDensity(altitude) / this.mission.atmosphere.seaLevelDensity;
-    this.skyMaterial.uniforms.sunGlow.value = densityRatio;
+    // Zenith angle of the geometric horizon: 90 degrees plus the dip.
+    this.horizonAngle = Math.PI / 2 + Math.acos(R_GROUND / (R_GROUND + Math.max(hKm, 0.002)));
+    this._renderSkyLut(Math.max(hKm, 0.002));
 
-    // --- Stars appear as the sky darkens ---------------------------------
-    this.starMaterial.uniforms.opacity.value = THREE.MathUtils.clamp(
-      (altitude - 18000) / 34000,
-      0,
-      1
-    );
+    const u = this.skyMaterial.uniforms;
+    u.camHeight.value = hKm;
+    u.downrange.value = downrangeKm;
+    u.horizonAngle.value = this.horizonAngle;
+    u.time.value += dt;
+    if (this.probe) {
+      this.probe.uniforms.downrange.value = downrangeKm;
+      this.probe.uniforms.horizonAngle.value = this.horizonAngle;
+    }
 
-    // --- Scaled globe ------------------------------------------------------
-    // Placing the sphere centre one scaled planet-radius plus one scaled
-    // altitude below the camera reproduces the true horizon dip exactly.
-    const scaledAltitude = altitude * GLOBE_SCALE;
-    this.globeGroup.position.set(0, -(GLOBE_RADIUS + scaledAltitude), 0);
+    // --- Sun: what survives the air above the camera ----------------------
+    const sunT = sunTransmittance(hKm, this.sunDirection.y, this._sunT);
+    this.sunLight.color.set(SUN_COLOR).multiply(sunT);
+    this.sunLight.intensity = SUN_INTENSITY;
+    // The disc reddens and dims with the same transmittance.
+    this.sun.setStrength(1, sunT);
+    // White-balance for that light, mostly: a camera set for daylight still
+    // leaves a little warmth in low sun, and none above the air.
+    const lum = 0.2126 * sunT.r + 0.7152 * sunT.g + 0.0722 * sunT.b;
+    const balance = (c) => THREE.MathUtils.lerp(1, lum / Math.max(c, 1e-3), 0.85);
+    this.whiteBalance.setRGB(balance(sunT.r), balance(sunT.g), balance(sunT.b));
 
-    const globeFade = THREE.MathUtils.clamp((altitude - 4000) / 22000, 0, 1);
-    this.globeMaterial.uniforms.opacity.value = globeFade;
-    this.limbMaterial.uniforms.opacity.value = globeFade;
-    this.globeGroup.visible = globeFade > 0.005;
+    // --- Haze and ground light for the launch complex ---------------------
+    // Horizon radiance, averaged across and away from the sun, is what
+    // distant ground fades into.
+    const h = this._horizonDirs ?? (this._horizonDirs = [0, 1, 2, 3].map((i) => {
+      const a = (i / 4) * Math.PI * 2;
+      return new THREE.Vector3(Math.cos(a), 0.02, Math.sin(a)).normalize();
+    }));
+    const tmp = this._tmpColor ?? (this._tmpColor = new THREE.Color());
+    this.hazeColor.setRGB(0, 0, 0);
+    for (const d of h) this.hazeColor.add(skyRadiance(hKm, d, this.sunDirection, tmp));
+    this.hazeColor.multiplyScalar(SUN_INTENSITY / h.length);
+    // Irradiance on flat ground: direct sun plus skylight (see the shader).
+    const cosSun = Math.max(this.sunDirection.y, 0);
+    const groundSunT = sunTransmittance(0, this.sunDirection.y, tmp);
+    this.groundLight
+      .setRGB(0.06, 0.09, 0.14)
+      .add(groundSunT.clone().multiplyScalar(cosSun))
+      .multiplyScalar(SUN_INTENSITY);
 
-    // Slowly rotate so the surface below is not static during a long climb.
-    this.globe.rotation.y += dt * 0.0009;
+    this.ground?.setView(camY, this.hazeColor, this.groundLight);
 
-    // --- Lighting ----------------------------------------------------------
-    const target = focus ?? camera.position;
-    this.sunLight.target.position.copy(target);
-    this.sunLight.position.copy(target).addScaledVector(this.sunDirection, 500);
+    // --- Stars appear as the sky darkens ----------------------------------
+    // Only when there is no bright air in view: the camera is exposed for a
+    // sunlit vehicle, so this is a gentle nod rather than a full sky.
+    this.starMaterial.uniforms.opacity.value = THREE.MathUtils.clamp((hKm - 45) / 60, 0, 1) * 0.55;
 
-    // Above the atmosphere the blue sky fill disappears and lighting becomes
-    // as harsh as it is on the Moon.
-    this.ambient.intensity = 0.28 + densityRatio * 1.3;
+    // --- Lighting probe ---------------------------------------------------
+    if (Math.abs(hKm - this._probeAltitude) > probeStep(hKm)) this._bakeProbe(hKm);
+
+    // --- Shadow frustum ---------------------------------------------------
+    const target = focus ?? camera?.position;
+    if (target) {
+      this.sunLight.target.position.copy(target);
+      this.sunLight.position.copy(target).addScaledVector(this.sunDirection, 500);
+    }
   }
 
   setQuality(quality) {
-    const size = quality === "low" ? 1024 : quality === "high" ? 2048 : 2048;
+    const size = quality === "low" ? 1024 : 2048;
     if (this.sunLight.shadow.mapSize.x !== size) {
       this.sunLight.shadow.mapSize.set(size, size);
       if (this.sunLight.shadow.map) {
@@ -435,19 +654,20 @@ export default class EarthScene {
     this.scene.remove(this.group);
     this.scene.remove(this.sunLight);
     this.scene.remove(this.sunLight.target);
-    this.scene.remove(this.ambient);
+    if (this.probe && this.scene.environment === this.probe.texture) this.scene.environment = null;
+    this.probe?.dispose();
     this.group.traverse((o) => {
       if (o.geometry) o.geometry.dispose();
     });
     this.skyMaterial.dispose();
+    this.lutMaterial.dispose();
+    this.lutQuad.dispose();
+    this.lutInScatter.dispose();
+    this.lutTransmittance.dispose();
     this.starMaterial.dispose();
-    this.globeMaterial.dispose();
-    this.limbMaterial.dispose();
-    // Both of these were left on the GPU after every launch: the sun sprite's
-    // texture is baked per scene, and a light's shadow map is a render target
-    // that removing the light from the scene does not release.
-    this.sunSprite.material.map?.dispose();
-    this.sunSprite.material.dispose();
+    this.sun.dispose();
+    // A light's shadow map is a render target that removing the light from
+    // the scene does not release.
     this.sunLight.shadow.map?.dispose();
     this.sunLight.shadow.map = null;
   }

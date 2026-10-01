@@ -2,6 +2,7 @@ import * as THREE from "three";
 import { makeRng, makeSimplex2, fbm, clamp } from "../materials/noise.js";
 import { buildEarthMaps } from "../materials/textures.js";
 import { createSun } from "../materials/sun.js";
+import EarthGlobe from "./EarthGlobe.js";
 import { createLunarProbe } from "../materials/environmentMaps.js";
 import {
   SUN_COLOR,
@@ -71,33 +72,6 @@ const SKY_EXPOSURE = {
   // set for sunlit ground; at 0.98 several hundred did.
   surface: { threshold: 1.1, gain: 0.45, milkyWay: 0.0 },
 };
-
-const atmosphereVertexShader = /* glsl */ `
-  varying vec3 vNormal;
-  varying vec3 vViewDir;
-  void main() {
-    vNormal = normalize(normalMatrix * normal);
-    vec4 mv = modelViewMatrix * vec4(position, 1.0);
-    vViewDir = normalize(-mv.xyz);
-    gl_Position = projectionMatrix * mv;
-  }
-`;
-
-const atmosphereFragmentShader = /* glsl */ `
-  uniform vec3 glowColor;
-  uniform vec3 sunDirection;
-  varying vec3 vNormal;
-  varying vec3 vViewDir;
-  void main() {
-    // Rim brightens toward the limb (Rayleigh-ish forward scattering shell).
-    float rim = 1.0 - abs(dot(vNormal, vViewDir));
-    rim = pow(clamp(rim, 0.0, 1.0), 2.6);
-    // Only the sunlit limb glows.
-    float lit = clamp(dot(vNormal, normalize(sunDirection)) * 0.5 + 0.5, 0.0, 1.0);
-    float a = rim * pow(lit, 1.6);
-    gl_FragColor = vec4(glowColor, a * 0.9);
-  }
-`;
 
 export default class Environment {
   /**
@@ -310,51 +284,12 @@ export default class Environment {
     this.earthGroup.position.copy(dir).multiplyScalar(dist);
     this.group.add(this.earthGroup);
 
-    const surface = new THREE.Mesh(
-      new THREE.SphereGeometry(radius, 64, 48),
-      new THREE.MeshStandardMaterial({
-        map,
-        roughness: 0.82,
-        metalness: 0,
-        // Cities on the night side, very faint.
-        emissive: 0x0a0f1a,
-        emissiveIntensity: 1,
-      })
-    );
-    surface.rotation.y = THREE.MathUtils.degToRad(-30);
-    this.earthGroup.add(surface);
-    this.earthSurface = surface;
-
-    const cloudLayer = new THREE.Mesh(
-      new THREE.SphereGeometry(radius * 1.012, 64, 48),
-      new THREE.MeshStandardMaterial({
-        map: clouds,
-        transparent: true,
-        roughness: 1,
-        metalness: 0,
-        depthWrite: false,
-      })
-    );
-    this.earthGroup.add(cloudLayer);
-    this.earthClouds = cloudLayer;
-
-    const atmosphere = new THREE.Mesh(
-      new THREE.SphereGeometry(radius * 1.09, 48, 32),
-      new THREE.ShaderMaterial({
-        vertexShader: atmosphereVertexShader,
-        fragmentShader: atmosphereFragmentShader,
-        uniforms: {
-          glowColor: { value: new THREE.Color(0x5fa8ff) },
-          sunDirection: { value: this.sunDirection.clone() },
-        },
-        transparent: true,
-        blending: THREE.AdditiveBlending,
-        side: THREE.BackSide,
-        depthWrite: false,
-      })
-    );
-    this.earthGroup.add(atmosphere);
-    this.earthAtmosphere = atmosphere;
+    // The same physically based globe the player left from (see
+    // entities/EarthGlobe.js), at ~3.5 degrees across.
+    this.earthGlobe = new EarthGlobe({ map, clouds }, this.sunDirection, { segments: 64, spin: 0.0016 });
+    this.earthGlobe.mesh.scale.setScalar(radius);
+    this.earthGlobe.mesh.rotation.y = THREE.MathUtils.degToRad(-30);
+    this.earthGroup.add(this.earthGlobe.mesh);
   }
 
   _buildLights() {
@@ -403,7 +338,7 @@ export default class Environment {
       this.options.sunElevationDeg = sun.elevationDeg;
       this._computeSunDirection();
       this.sunGroup.position.copy(this.sunDirection).multiplyScalar(SKY_RADIUS * 0.9);
-      this.earthAtmosphere.material.uniforms.sunDirection.value.copy(this.sunDirection);
+      this.earthGlobe.setSunDirection(this.sunDirection);
 
       // A very low sun means very long shadows, which need a deeper shadow
       // frustum to avoid being clipped short.
@@ -451,12 +386,9 @@ export default class Environment {
     this.sunLight.target.position.copy(target);
     this.sunLight.position.copy(target).addScaledVector(this.sunDirection, 400);
 
-    if (this.earthClouds) {
-      // Slow cloud drift; Earth's rotation is ~15 deg/hour, far too slow to
-      // see, so this is a deliberate, gentle exaggeration.
-      this.earthClouds.rotation.y += dt * 0.004;
-      this.earthSurface.rotation.y += dt * 0.0016;
-    }
+    // Slow cloud drift and spin; Earth's rotation is ~15 deg/hour, far too
+    // slow to see, so this is a deliberate, gentle exaggeration.
+    this.earthGlobe.update(dt);
   }
 
   /**
@@ -501,5 +433,6 @@ export default class Environment {
     if (this.scene.environment === this.envTexture) this.scene.environment = null;
     this.probe?.dispose();
     this.sun.dispose();
+    this.earthGlobe.dispose();
   }
 }

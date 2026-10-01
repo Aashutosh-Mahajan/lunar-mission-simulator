@@ -88,41 +88,54 @@ export function buildRegolithMaps(seed = 1337, size = 512) {
     });
   }
 
-  let albedoSum = 0;
+  // Pass 1: the base relief.
   for (let y = 0; y < size; y++) {
     for (let x = 0; x < size; x++) {
       const u = x / size;
       const v = y / size;
-
       // Base powdery undulation plus a fractured, ridged component.
       let h = fbm(noise, u * 7, v * 7, 5) * 0.5;
       h += ridged(noiseB, u * 13, v * 13, 4) * 0.28;
       // Fine grain — the "sandpaper" frequency.
       h += fbm(noiseB, u * 48, v * 48, 3) * 0.12;
-
-      // Stamp micro-craters, with the raised rim real impacts leave.
-      for (const c of craters) {
-        let dx = x - c.x;
-        let dy = y - c.y;
-        // Wrap so the tile stays seamless.
-        if (dx > size / 2) dx -= size;
-        if (dx < -size / 2) dx += size;
-        if (dy > size / 2) dy -= size;
-        if (dy < -size / 2) dy += size;
-        const d = Math.hypot(dx, dy);
-        if (d < c.r * 1.5) {
-          const t = d / c.r;
-          if (t < 1) {
-            // Parabolic bowl.
-            h -= c.depth * (1 - t * t) * 0.75;
-          }
-          // Raised rim just outside the bowl.
-          const rim = Math.exp(-((t - 1.05) * (t - 1.05)) / 0.06);
-          h += c.depth * rim * 0.3;
-        }
-      }
-
       height[y * size + x] = h;
+    }
+  }
+
+  // Pass 2: stamp micro-craters, with the raised rim real impacts leave.
+  // Each crater only visits the texels within reach of it (wrapping, so the
+  // tile stays seamless). Testing every crater at every texel was 68 million
+  // distance checks and most of the loading screen.
+  for (const c of craters) {
+    const reach = Math.ceil(c.r * 1.5);
+    const cx = Math.floor(c.x);
+    const cy = Math.floor(c.y);
+    for (let oy = -reach; oy <= reach; oy++) {
+      const y = (((cy + oy) % size) + size) % size;
+      const dy = cy + oy + 0.5 - c.y;
+      for (let ox = -reach; ox <= reach; ox++) {
+        const dx = cx + ox + 0.5 - c.x;
+        const d = Math.hypot(dx, dy);
+        if (d >= c.r * 1.5) continue;
+        const x = (((cx + ox) % size) + size) % size;
+        const t = d / c.r;
+        let dh = 0;
+        // Parabolic bowl.
+        if (t < 1) dh -= c.depth * (1 - t * t) * 0.75;
+        // Raised rim just outside the bowl.
+        dh += c.depth * Math.exp(-((t - 1.05) * (t - 1.05)) / 0.06) * 0.3;
+        height[y * size + x] += dh;
+      }
+    }
+  }
+
+  // Pass 3: albedo and roughness, which read the finished relief.
+  let albedoSum = 0;
+  for (let y = 0; y < size; y++) {
+    for (let x = 0; x < size; x++) {
+      const u = x / size;
+      const v = y / size;
+      const h = height[y * size + x];
 
       // --- Albedo -----------------------------------------------------
       // Dark basaltic grey; slight warm tint where the soil is churned and
@@ -751,5 +764,66 @@ export function buildTubeWallNormal(tubes = 178) {
   ctx.putImageData(img, 0, 0);
   const tex = finishTexture(canvas, { aniso: 16 });
   tex.wrapT = THREE.RepeatWrapping;
+  return tex;
+}
+
+/**
+ * Tileable fractal value noise, four independent fields in RGBA, for shaders
+ * that would otherwise evaluate noise per pixel. One mipmapped fetch replaces
+ * four hashes per octave, and the mip chain averages fine detail away with
+ * distance instead of letting it alias into glitter.
+ *
+ * Each channel is an fbm of `octaves` octaves whose lattice periods divide
+ * the texture size, so every octave — and the sum — wraps seamlessly.
+ */
+export function buildTileableNoise(seed = 2718, size = 256, octaves = 5) {
+  const rng = makeRng(seed);
+  const data = new Uint8Array(size * size * 4);
+  const smooth = (t) => t * t * (3 - 2 * t);
+
+  for (let channel = 0; channel < 4; channel++) {
+    const field = new Float32Array(size * size);
+    let amplitude = 0.5;
+    let norm = 0;
+    // Base period: 4 cells across the tile, doubling each octave.
+    for (let o = 0, period = 4; o < octaves; o++, period *= 2) {
+      const lattice = new Float32Array(period * period);
+      for (let i = 0; i < lattice.length; i++) lattice[i] = rng();
+      const cell = size / period;
+      for (let y = 0; y < size; y++) {
+        const fy = y / cell;
+        const iy = Math.floor(fy);
+        const ty = smooth(fy - iy);
+        const y0 = iy % period;
+        const y1 = (iy + 1) % period;
+        for (let x = 0; x < size; x++) {
+          const fx = x / cell;
+          const ix = Math.floor(fx);
+          const tx = smooth(fx - ix);
+          const x0 = ix % period;
+          const x1 = (ix + 1) % period;
+          const a = lattice[y0 * period + x0];
+          const b = lattice[y0 * period + x1];
+          const c = lattice[y1 * period + x0];
+          const d = lattice[y1 * period + x1];
+          field[y * size + x] += amplitude * lerp(lerp(a, b, tx), lerp(c, d, tx), ty);
+        }
+      }
+      norm += amplitude;
+      amplitude *= 0.5;
+    }
+    for (let i = 0; i < field.length; i++) {
+      data[i * 4 + channel] = clamp(Math.round((field[i] / norm) * 255), 0, 255);
+    }
+  }
+
+  const tex = new THREE.DataTexture(data, size, size, THREE.RGBAFormat);
+  tex.wrapS = THREE.RepeatWrapping;
+  tex.wrapT = THREE.RepeatWrapping;
+  tex.magFilter = THREE.LinearFilter;
+  tex.minFilter = THREE.LinearMipmapLinearFilter;
+  tex.generateMipmaps = true;
+  tex.anisotropy = 8;
+  tex.needsUpdate = true;
   return tex;
 }

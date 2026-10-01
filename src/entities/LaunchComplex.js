@@ -102,14 +102,17 @@ export default class LaunchComplex {
     const GROUND_EXTENT = 26000;
     const groundGeo = new THREE.PlaneGeometry(GROUND_EXTENT, GROUND_EXTENT, 1, 1);
     groundGeo.rotateX(-Math.PI / 2);
+    // Lit and hazed by the same atmosphere model as the sky (EarthScene
+    // feeds `groundLight` and `hazeColor` every frame), so where this plane
+    // ends and the sky shader's planet begins there is nothing to see.
     this.groundMaterial = new THREE.ShaderMaterial({
       uniforms: {
         map: { value: this.assets.capeGround },
-        hazeColor: { value: new THREE.Color(0x9fb4c8) },
-        hazeStart: { value: 1500 },
-        hazeEnd: { value: GROUND_EXTENT * 0.5 },
-        brightness: { value: 1.05 },
+        hazeColor: { value: new THREE.Color(0.3, 0.4, 0.55) },
+        groundLight: { value: new THREE.Color(2, 2, 2) },
+        viewHeight: { value: 0 },
         opacity: { value: 1 },
+        halfExtent: { value: GROUND_EXTENT / 2 },
       },
       vertexShader: /* glsl */ `
         varying vec2 vUv;
@@ -127,25 +130,35 @@ export default class LaunchComplex {
       fragmentShader: /* glsl */ `
         uniform sampler2D map;
         uniform vec3 hazeColor;
-        uniform float hazeStart;
-        uniform float hazeEnd;
-        uniform float brightness;
+        uniform vec3 groundLight;
+        uniform float viewHeight;   // m
         uniform float opacity;
+        uniform float halfExtent;
         varying vec2 vUv;
         varying vec3 vWorld;
         void main() {
-          float vRange = length(vWorld.xz - cameraPosition.xz);
-          vec3 col = texture2D(map, vUv).rgb * brightness;
-          // Aerial perspective: distant land fades into the sky's haze.
-          float haze = smoothstep(hazeStart, hazeEnd, vRange) * 0.8;
-          gl_FragColor = vec4(mix(col, hazeColor, haze), opacity);
-          #include <tonemapping_fragment>
-          #include <colorspace_fragment>
+          // Lambertian ground under sun plus skylight.
+          vec3 albedo = texture2D(map, vUv).rgb;
+          vec3 col = albedo * groundLight / 3.14159265;
+
+          // Aerial perspective through an exponential atmosphere: optical
+          // depth along the path at its mean height, Rayleigh plus haze.
+          float dKm = length(vWorld - cameraPosition) / 1000.0;
+          float hKm = max((viewHeight + vWorld.y) * 0.5, 0.0) / 1000.0;
+          vec3 beta = vec3(5.802e-3, 13.558e-3, 33.1e-3) * exp(-hKm / 8.0)
+                    + vec3(4.44e-3) * exp(-hKm / 1.2);
+          vec3 T = exp(-beta * dKm);
+          col = col * T + hazeColor * (1.0 - T);
+
+          // Feather the far edge so the sky shader's planet takes over.
+          float r = max(abs(vWorld.x), abs(vWorld.z)) / halfExtent;
+          float edge = 1.0 - smoothstep(0.75, 1.0, r);
+          gl_FragColor = vec4(col, opacity * edge);
         }
       `,
       transparent: true,
+      depthWrite: false,
     });
-    this.groundMaterial.opacity = 1;
     this.ground = new THREE.Mesh(groundGeo, this.groundMaterial);
     this.ground.position.y = -0.4;
     this.group.add(this.ground);
@@ -376,12 +389,27 @@ export default class LaunchComplex {
    * The pad only matters for the first few kilometres. Fading it out (rather
    * than popping it) keeps the transition to the high-altitude view smooth.
    */
+  /**
+   * Haze and light from the sky model, and the height the scene is seen
+   * from. Called by EarthScene every frame.
+   */
+  setView(cameraHeight, hazeColor, groundLight) {
+    this._viewHeight = cameraHeight;
+    const u = this.groundMaterial.uniforms;
+    u.viewHeight.value = cameraHeight;
+    u.hazeColor.value.copy(hazeColor);
+    u.groundLight.value.copy(groundLight);
+  }
+
   update(dt, altitude, elapsed) {
-    const fade = 1 - THREE.MathUtils.clamp((altitude - 2500) / 5000, 0, 1);
+    // Faded on the *camera's* height: the pad camera stays on the ground
+    // while the vehicle climbs, and must keep its ground under it.
+    const h = this._viewHeight ?? altitude;
+    const fade = 1 - THREE.MathUtils.clamp((h - 4000) / 6000, 0, 1);
     this.group.visible = fade > 0.01;
     if (!this.group.visible) return;
 
-    this.groundMaterial.opacity = 1;
+    this.groundMaterial.uniforms.opacity.value = fade;
 
     // Strobes flash asynchronously, as real obstruction lights do.
     this.strobes.forEach((mat, i) => {

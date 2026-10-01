@@ -58,8 +58,9 @@ export default class AscentRuntime {
     this.elapsed = 0;
     this.timeScale = 1;
 
-    this.earth = new EarthScene(scene, this.mission);
+    this.earth = new EarthScene(scene, this.mission, assets);
     this.pad = new LaunchComplex(scene, assets, this.mission);
+    this.earth.ground = this.pad;
     this.rocket = new Rocket(scene, assets, this.mission);
     this.countdown = new Countdown();
     this.countdown.start();

@@ -2,6 +2,8 @@ import * as THREE from "three";
 import { applyLunarPhotometry } from "./photometry.js";
 import { applyRegolithDetail } from "./regolithShader.js";
 import { REGOLITH_ALBEDO } from "../constants.js";
+import { bakeEarthMaps } from "./earthBake.js";
+import { bakeMoonMaps } from "./moonBake.js";
 import * as CANNON from "cannon-es";
 import {
   buildRegolithMaps,
@@ -12,6 +14,7 @@ import {
   buildEarthMaps,
   buildGlowSprite,
   buildDustSprite,
+  buildTileableNoise,
 } from "./textures.js";
 
 // ---------------------------------------------------------------------------
@@ -23,7 +26,11 @@ import {
 /** Lets the browser paint the loading bar between expensive bakes. */
 const yieldToBrowser = () => new Promise((resolve) => setTimeout(resolve, 0));
 
-export async function buildAssets(onProgress = () => {}) {
+/**
+ * @param {(progress: number, message: string) => void} onProgress
+ * @param {THREE.WebGLRenderer} [renderer] for maps baked on the GPU
+ */
+export async function buildAssets(onProgress = () => {}, renderer = null) {
   const assets = {};
 
   onProgress(0.05, "Baking regolith surface maps…");
@@ -45,7 +52,13 @@ export async function buildAssets(onProgress = () => {}) {
   await yieldToBrowser();
   // Baked once here and shared by the launch sky (Phase 2) and the cislunar
   // scene (Phase 3), where Earth is the hero object and needs the resolution.
-  assets.earth = buildEarthMaps(20240, 1024);
+  // On the GPU when there is a renderer: 2048 px of real 3D noise in a few
+  // milliseconds, where the CPU version took most of a second at 1024.
+  assets.earth = renderer ? bakeEarthMaps(renderer, { width: 2048 }) : buildEarthMaps(20240, 1024);
+  // The Moon seen from cislunar space: maria, craters and relief.
+  if (renderer) assets.moon = bakeMoonMaps(renderer, { width: 2048 });
+  // Shared noise fields for the launch sky's clouds and surface.
+  assets.noise = buildTileableNoise(2718, 256, 5);
 
   onProgress(0.8, "Preparing particle sprites…");
   await yieldToBrowser();

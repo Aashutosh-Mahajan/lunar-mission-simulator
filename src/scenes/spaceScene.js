@@ -1,6 +1,11 @@
 import * as THREE from "three";
 import { makeRng } from "../materials/noise.js";
-import { buildSunSprite, buildRegolithMaps } from "../materials/textures.js";
+import { buildRegolithMaps } from "../materials/textures.js";
+import { createSun } from "../materials/sun.js";
+import { createSpaceProbe } from "../materials/environmentMaps.js";
+import EarthGlobe from "../entities/EarthGlobe.js";
+import { PHASE_SLOPE } from "../materials/photometry.js";
+import { SUN_COLOR, SUN_INTENSITY, REGOLITH_ALBEDO } from "../constants.js";
 
 // ---------------------------------------------------------------------------
 // Phase 3 — cislunar space, between Earth orbit and the Moon.
@@ -29,149 +34,74 @@ const EARTH_FAR = { radius: 46, distance: 2760 }; // ~2° — a blue marble
 const MOON_FAR = { radius: 30, distance: 6200 }; // a bright point
 const MOON_NEAR = { radius: 2300, distance: 4025 }; // ~70° across, filling the view
 
+// A 1x1 "straight up" normal map, for when the Moon's maps were not baked.
+const FLAT_NORMAL = new THREE.DataTexture(new Uint8Array([128, 128, 255, 255]), 1, 1);
+FLAT_NORMAL.needsUpdate = true;
+
+const SUN_DEPARTURE = new THREE.Vector3(0.93, 0.3, 0.21).normalize();
+const SUN_ARRIVAL = new THREE.Vector3(0.74, 0.26, -0.62).normalize();
+
 // Directions the two bodies sit in, relative to the coasting stack.
 const EARTH_DIR = new THREE.Vector3(-0.16, -0.42, -0.89).normalize();
 const MOON_DIR = new THREE.Vector3(0.08, 0.16, 0.98).normalize();
 
-const planetVertex = /* glsl */ `
+// The Moon: baked albedo and relief (materials/moonBake.js). The normal
+// map's tangent frame is rebuilt from the object-space normal using the
+// SphereGeometry parameterisation it was baked for (east = +u, north = +v).
+const moonVertex = /* glsl */ `
   varying vec3 vNormal;
-  varying vec3 vView;
+  varying vec3 vEast;
+  varying vec3 vNorth;
+  varying vec3 vWorldPos;
   varying vec2 vUv;
   void main() {
-    vNormal = normalize(normalMatrix * normal);
+    vec3 no = normalize(normal);
+    float sinT = length(no.xz);
+    vec3 east = sinT > 1e-4 ? vec3(no.z, 0.0, -no.x) / sinT : vec3(1.0, 0.0, 0.0);
+    vec3 north = cross(no, east);
+    mat3 m = mat3(modelMatrix);
+    vNormal = normalize(m * no);
+    vEast = normalize(m * east);
+    vNorth = normalize(m * north);
     vUv = uv;
-    vec4 mv = modelViewMatrix * vec4(position, 1.0);
-    vView = normalize(-mv.xyz);
-    gl_Position = projectionMatrix * mv;
-  }
-`;
-
-const earthFragment = /* glsl */ `
-  uniform sampler2D dayMap;
-  uniform sampler2D cloudMap;
-  uniform vec3 sunDirection;
-  uniform float cloudOffset;
-  varying vec3 vNormal;
-  varying vec3 vView;
-  varying vec2 vUv;
-
-  void main() {
-    vec3 n = normalize(vNormal);
-    vec3 base = texture2D(dayMap, vUv).rgb;
-    vec4 cloud = texture2D(cloudMap, vec2(vUv.x + cloudOffset, vUv.y));
-    base = mix(base, vec3(0.95, 0.96, 0.98), cloud.a * 0.85);
-
-    // Terminator. In vacuum it is sharp, softened only by the atmosphere.
-    float lit = dot(n, normalize(sunDirection));
-    float day = smoothstep(-0.12, 0.22, lit);
-    vec3 night = base * 0.035 + vec3(0.012, 0.014, 0.028);
-    vec3 col = mix(night, base, day);
-
-    // Atmospheric limb: a blue rim that brightens toward the terminator.
-    float rim = pow(1.0 - abs(dot(n, normalize(vView))), 2.4);
-    col += vec3(0.32, 0.55, 0.95) * rim * day * 0.85;
-
-    gl_FragColor = vec4(col, 1.0);
+    vec4 world = modelMatrix * vec4(position, 1.0);
+    vWorldPos = world.xyz;
+    gl_Position = projectionMatrix * viewMatrix * world;
   }
 `;
 
 const moonFragment = /* glsl */ `
-  uniform sampler2D surfaceMap;
+  uniform sampler2D albedoMap;
+  uniform sampler2D normalMap;
   uniform vec3 sunDirection;
+  uniform float sunIrradiance;
   varying vec3 vNormal;
-  varying vec3 vView;
+  varying vec3 vEast;
+  varying vec3 vNorth;
+  varying vec3 vWorldPos;
   varying vec2 vUv;
 
-  float hash(vec2 p) {
-    vec3 p3 = fract(vec3(p.xyx) * 0.1031);
-    p3 += dot(p3, p3.yzx + 33.33);
-    return fract((p3.x + p3.y) * p3.z);
-  }
-  vec2 hash2(vec2 p) {
-    return vec2(hash(p), hash(p + 19.7));
-  }
-  float noise(vec2 p) {
-    vec2 i = floor(p), f = fract(p);
-    f = f * f * (3.0 - 2.0 * f);
-    return mix(mix(hash(i), hash(i + vec2(1,0)), f.x),
-               mix(hash(i + vec2(0,1)), hash(i + vec2(1,1)), f.x), f.y);
-  }
-  float fbm(vec2 p) {
-    float a = 0.5, s = 0.0, norm = 0.0;
-    for (int i = 0; i < 5; i++) {
-      s += a * noise(p);
-      norm += a;
-      a *= 0.5;
-      p *= 2.03;
-    }
-    return s / norm;
-  }
-
-  // A crater field: one impact per grid cell, with a dark floor, a bright
-  // rim and a faint ejecta halo. Two scales are layered so the disc has both
-  // the big named basins and a dusting of smaller craters.
-  float craters(vec2 p, float scale, out float rim) {
-    p *= scale;
-    vec2 cell = floor(p);
-    float floorDark = 0.0;
-    rim = 0.0;
-    for (int y = -1; y <= 1; y++) {
-      for (int x = -1; x <= 1; x++) {
-        vec2 c = cell + vec2(float(x), float(y));
-        vec2 centre = c + 0.15 + 0.7 * hash2(c);
-        // Power-law sizes: many small craters, few large ones, as on the
-        // real surface. A uniform distribution reads as a golf ball.
-        float sizeRoll = hash(c + 3.1);
-        float radius = 0.05 + 0.34 * sizeRoll * sizeRoll;
-        // Most cells are empty; craters should punctuate, not tile.
-        if (hash(c + 7.7) > 0.42) continue;
-        float d = length(p - centre) / radius;
-        floorDark += (1.0 - smoothstep(0.0, 0.85, d)) * 0.8;
-        rim += exp(-pow((d - 0.95) / 0.22, 2.0)) * 0.9;
-      }
-    }
-    return clamp(floorDark, 0.0, 1.0);
-  }
-
   void main() {
-    vec3 n = normalize(vNormal);
-    vec3 tex = texture2D(surfaceMap, vUv * 6.0).rgb;
+    vec3 albedo = texture2D(albedoMap, vUv).rgb;
+    vec3 tn = texture2D(normalMap, vUv).xyz * 2.0 - 1.0;
+    vec3 n = normalize(vEast * tn.x + vNorth * tn.y + normalize(vNormal) * tn.z);
 
-    // Mare basins: large, dark, roughly circular floods of basalt covering
-    // about a third of the near side. Centred so the threshold actually bites.
-    float basinField = fbm(vUv * vec2(4.0, 2.2) + 11.0);
-    float mare = smoothstep(0.40, 0.56, basinField);
-
-    // Real lunar albedo is only about 0.12 — the Moon looks bright because
-    // the sun is unfiltered, not because the surface is. Painting it pale
-    // grey is the single easiest way to make it read as fake.
-    vec3 highland = vec3(0.215, 0.211, 0.200);
-    vec3 basalt = vec3(0.105, 0.104, 0.108);
-    vec3 albedo = mix(highland, basalt, mare);
-
-    // Craters, coarser in the highlands than over the young mare.
-    float rimBig, rimSmall;
-    float bigFloor = craters(vUv, 14.0, rimBig);
-    float smallFloor = craters(vUv + 4.3, 34.0, rimSmall);
-    float floorDark = max(bigFloor * 0.55, smallFloor * 0.35);
-    float rim = max(rimBig, rimSmall * 0.7);
-
-    albedo *= 1.0 - floorDark * 0.30;
-    albedo += vec3(0.055) * rim * (1.0 - mare * 0.6);
-
-    // Fine grain from the shared regolith map.
-    albedo *= 0.86 + tex.r * 0.28;
-
-    // No atmosphere: a hard terminator and essentially no fill in shadow.
-    float lit = clamp(dot(n, normalize(sunDirection)), 0.0, 1.0);
-    // Regolith backscatters strongly, so a full disc looks flat and bright
-    // rather than shaded like a billiard ball.
-    float scatter = pow(lit, 0.6);
-    // Sharpen the last few degrees into the terminator — in vacuum the shadow
-    // line is a hard edge, not a gradient.
-    scatter *= smoothstep(0.0, 0.10, lit);
-    vec3 col = albedo * scatter * 1.95 + albedo * 0.010;
-
+    // The same photometry as the landing sites (materials/photometry.js):
+    // Lommel-Seeliger, which is why a full Moon is evenly bright to its limb
+    // rather than shaded like a billiard ball, with the backscatter phase law
+    // that makes a crescent so much dimmer than its area suggests.
+    vec3 v = normalize(cameraPosition - vWorldPos);
+    float mu0 = max(dot(n, sunDirection), 0.0);
+    float mu = max(dot(n, v), 0.05);
+    float ls = 2.0 * mu0 / (mu0 + mu);
+    float cosPhase = dot(sunDirection, v);
+    float phaseLaw = 1.0 + ${PHASE_SLOPE.toFixed(3)} * cosPhase + 0.35 * pow(max(cosPhase, 0.0), 48.0);
+    // Relief only casts self-shadow where the smooth sphere is lit: in vacuum
+    // the terminator is a hard line, broken only by peaks catching the sun.
+    float geoLit = smoothstep(-0.02, 0.04, dot(normalize(vNormal), sunDirection));
+    vec3 col = albedo * sunIrradiance * mix(mu0, ls, 0.75) * phaseLaw * geoLit / 3.14159265;
+    // Earthshine: the night side is not black, but it is close.
+    col += albedo * 0.0015;
     gl_FragColor = vec4(col, 1.0);
   }
 `;
@@ -188,10 +118,13 @@ export default class SpaceScene {
     this.group.name = "cislunar";
     scene.add(this.group);
 
-    // The sun sits almost side-on. Earth is astern and the Moon ahead, so a
-    // sun along either of those axes would leave one of them fully backlit;
-    // keeping it broadside gives both a strong terminator instead.
-    this.sunDirection = new THREE.Vector3(0.93, 0.30, 0.21).normalize();
+    // The sun sits roughly side-on. This scene's frame is the stack's —
+    // Earth astern, the Moon ahead — and that frame turns as the trans-lunar
+    // trajectory bends through the crossing, so the sun's apparent direction
+    // swings with it: early on it lights the Earth falling away behind, and
+    // by arrival the face of the Moon ahead. (Fixed broadside, with correct
+    // shading, the Moon arrived as a black disc with a sliver of limb.)
+    this.sunDirection = SUN_DEPARTURE.clone();
 
     this._buildStars();
     this._buildSun();
@@ -257,12 +190,14 @@ export default class SpaceScene {
           gl_PointSize = size;
         }
       `,
+      uniforms: { gain: { value: 0.75 } },
       fragmentShader: /* glsl */ `
+        uniform float gain;
         varying vec3 vColor;
         void main() {
           vec2 uv = gl_PointCoord - vec2(0.5);
           float a = smoothstep(0.5, 0.06, length(uv));
-          a *= a;
+          a *= a * gain;
           if (a < 0.01) discard;
           gl_FragColor = vec4(vColor, a);
         }
@@ -279,61 +214,72 @@ export default class SpaceScene {
   }
 
   _buildSun() {
-    const sprite = buildSunSprite();
     const dist = SKY_RADIUS * 0.92;
-    this.sunSprite = new THREE.Sprite(
-      new THREE.SpriteMaterial({
-        map: sprite,
-        blending: THREE.AdditiveBlending,
-        depthWrite: false,
-        transparent: true,
-      })
-    );
-    this.sunSprite.scale.setScalar(dist * 0.02);
-    this.sunSprite.position.copy(this.sunDirection).multiplyScalar(dist);
-    this.group.add(this.sunSprite);
+    // Not depth-tested against the planets here (they are drawn as
+    // background), but the spacecraft still occludes it.
+    this.sun = createSun(dist, { depthTest: true });
+    this.sun.group.position.copy(this.sunDirection).multiplyScalar(dist);
+    this.group.add(this.sun.group);
   }
 
   _buildEarth() {
-    const { map, clouds } = this.assets.earth;
-    this.earthMaterial = new THREE.ShaderMaterial({
-      uniforms: {
-        dayMap: { value: map },
-        cloudMap: { value: clouds },
-        sunDirection: { value: this.sunDirection.clone() },
-        cloudOffset: { value: 0 },
-      },
-      vertexShader: planetVertex,
-      fragmentShader: earthFragment,
-    });
-    this.earth = new THREE.Mesh(new THREE.SphereGeometry(1, 96, 64), this.earthMaterial);
+    this.earthGlobe = new EarthGlobe(this.assets.earth, this.sunDirection);
+    this.earth = this.earthGlobe.mesh;
     this.earth.renderOrder = -200;
+    this.earthGlobe.limb.renderOrder = -199;
     this.group.add(this.earth);
   }
 
   _buildMoon() {
-    const maps = buildRegolithMaps(5150, 256);
+    // Baked once at load and shared (see assets.js); a plain grey fallback
+    // keeps the scene working without a GPU bake.
+    const maps = this.assets.moon ?? {
+      map: buildRegolithMaps(5150, 256).map,
+      normalMap: null,
+    };
     this.moonMaterial = new THREE.ShaderMaterial({
       uniforms: {
-        surfaceMap: { value: maps.map },
+        albedoMap: { value: maps.map },
+        normalMap: { value: maps.normalMap ?? FLAT_NORMAL },
         sunDirection: { value: this.sunDirection.clone() },
+        sunIrradiance: { value: SUN_INTENSITY },
       },
-      vertexShader: planetVertex,
+      vertexShader: moonVertex,
       fragmentShader: moonFragment,
     });
-    this.moon = new THREE.Mesh(new THREE.SphereGeometry(1, 96, 64), this.moonMaterial);
+    this.moon = new THREE.Mesh(new THREE.SphereGeometry(1, 128, 96), this.moonMaterial);
+    // Tidally locked: the maria-rich near side (object -x in the bake) faces
+    // Earth, and so faces the spacecraft coming from it.
+    this.moon.rotation.y = -Math.PI / 2;
     this.moon.renderOrder = -199;
     this.group.add(this.moon);
   }
 
   _buildLights() {
-    this.sunLight = new THREE.DirectionalLight(0xfff6e8, 3.4);
+    // The same unfiltered sun as on the lunar surface.
+    this.sunLight = new THREE.DirectionalLight(SUN_COLOR, SUN_INTENSITY);
     this.sunLight.castShadow = false; // nothing casts onto anything out here
     this.scene.add(this.sunLight);
 
-    // Only starlight and planetshine fill the shadows.
-    this.ambient = new THREE.HemisphereLight(0x0a1424, 0x120f0c, 0.25);
-    this.scene.add(this.ambient);
+    // Fill comes from the sunlit Earth and Moon, through the probe.
+    this.probe = this.assets.renderer ? createSpaceProbe(this.assets.renderer) : null;
+    this._probeJourney = -1;
+  }
+
+  /** Re-bakes the lighting probe as Earth and the Moon change size. */
+  _bakeProbe(earthRadius, earthDist, moonRadius, moonDist) {
+    if (!this.probe) return;
+    const u = this.probe.uniforms;
+    u.sunDirection.value.copy(this.sunDirection);
+    u.earthDirection.value.copy(EARTH_DIR);
+    u.earthCos.value = Math.cos(Math.asin(Math.min(earthRadius / earthDist, 0.999)));
+    u.moonDirection.value.copy(MOON_DIR);
+    u.moonCos.value = Math.cos(Math.asin(Math.min(moonRadius / moonDist, 0.999)));
+    // Mean radiance of each sunlit disc: albedo x irradiance / pi.
+    const k = SUN_INTENSITY / Math.PI;
+    u.earthRadiance.value.setRGB(0.28 * k, 0.32 * k, 0.4 * k);
+    u.moonRadiance.value.setRGB(REGOLITH_ALBEDO * k, REGOLITH_ALBEDO * 0.97 * k, REGOLITH_ALBEDO * 0.92 * k);
+    this.scene.environment = this.probe.bake();
   }
 
   /**
@@ -364,9 +310,19 @@ export default class SpaceScene {
     this.moon.scale.setScalar(moonRadius);
     this.moon.position.copy(MOON_DIR).multiplyScalar(moonDist);
 
-    this.earthMaterial.uniforms.cloudOffset.value += dt * 0.0025;
-    this.earth.rotation.y += dt * 0.012;
-    this.moon.rotation.y += dt * 0.004;
+    // Sun direction for this point in the crossing (see the constructor).
+    const turn = THREE.MathUtils.smoothstep(journey, 0.25, 0.95);
+    this.sunDirection.copy(SUN_DEPARTURE).lerp(SUN_ARRIVAL, turn).normalize();
+    this.earthGlobe.setSunDirection(this.sunDirection);
+    this.moonMaterial.uniforms.sunDirection.value.copy(this.sunDirection);
+    this.sun.group.position.copy(this.sunDirection).multiplyScalar(SKY_RADIUS * 0.92);
+
+    this.earthGlobe.update(dt);
+
+    if (Math.abs(journey - this._probeJourney) > 0.01) {
+      this._probeJourney = journey;
+      this._bakeProbe(earthRadius, earthDist, moonRadius, moonDist);
+    }
 
     this.sunLight.position.copy(camera.position).addScaledVector(this.sunDirection, 1000);
     this.sunLight.target.position.copy(camera.position);
@@ -389,12 +345,14 @@ export default class SpaceScene {
   dispose() {
     this.scene.remove(this.group);
     this.scene.remove(this.sunLight);
-    this.scene.remove(this.ambient);
+    if (this.probe && this.scene.environment === this.probe.texture) this.scene.environment = null;
+    this.probe?.dispose();
     this.group.traverse((o) => {
       if (o.geometry) o.geometry.dispose();
     });
     this.starMaterial.dispose();
-    this.earthMaterial.dispose();
+    this.earthGlobe.dispose();
     this.moonMaterial.dispose();
+    this.sun.dispose();
   }
 }

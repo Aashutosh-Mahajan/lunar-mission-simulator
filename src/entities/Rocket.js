@@ -74,7 +74,13 @@ export default class Rocket {
     // Starts at the width of the engine cluster rather than at a point, and
     // widens downstream. Open-ended, so the shader must fade to nothing before
     // the far rim or that rim shows as a hard edge.
-    const geo = new THREE.CylinderGeometry(0.55, 1, 1, 32, 14, true);
+    //
+    // The radius is set per vertex in the shader rather than by scaling the
+    // mesh: a scaled cone keeps its proportions, so a plume blooming to
+    // 35 m in vacuum also started 19 m wide at the nozzle, and drew a
+    // translucent disc round the engines. Here it leaves at the width of the
+    // engine cluster whatever it does downstream.
+    const geo = new THREE.CylinderGeometry(1, 1, 1, 32, 18, true);
     geo.translate(0, -0.5, 0);
 
     this.plumeMaterial = new THREE.ShaderMaterial({
@@ -83,18 +89,27 @@ export default class Rocket {
         time: { value: 0 },
         expansion: { value: 0 }, // 0 = sea level, 1 = vacuum
         luminosity: { value: 1 }, // kerosene flame 1, hydrogen far less
+        nozzleRadius: { value: 4 }, // m, the engine cluster
+        farRadius: { value: 8 }, // m, at the far end
+        bloom: { value: 0.6 }, // how early the plume widens (exponent)
         coreColor: { value: new THREE.Color(0xfff0d0) },
         midColor: { value: new THREE.Color(0xff9540) },
         edgeColor: { value: new THREE.Color(0xff5a20) },
       },
       vertexShader: /* glsl */ `
+        uniform float nozzleRadius;
+        uniform float farRadius;
+        uniform float bloom;
         varying vec2 vUv;
         varying vec3 vNormal;
         varying vec3 vView;
         void main() {
           vUv = uv;
+          float along = 1.0 - uv.y;
+          float r = mix(nozzleRadius, farRadius, pow(along, bloom));
+          vec3 p = vec3(position.x * r, position.y, position.z * r);
           vNormal = normalize(normalMatrix * normal);
-          vec4 mv = modelViewMatrix * vec4(position, 1.0);
+          vec4 mv = modelViewMatrix * vec4(p, 1.0);
           vView = normalize(-mv.xyz);
           gl_Position = projectionMatrix * mv;
         }
@@ -324,13 +339,19 @@ export default class Rocket {
     // Long enough to read as a vacuum plume, short enough that the chase
     // camera doesn't end up inside it.
     const length = stage.diameter * (3.4 + expansion * 4.5) * (0.5 + throttle * 0.7);
+    const u = this.plumeMaterial.uniforms;
+    u.nozzleRadius.value = baseRadius * 0.82;
+    u.farRadius.value = radius;
+    // In air the jet stays collimated and widens late; in vacuum it flares
+    // out almost at the nozzle lip.
+    u.bloom.value = THREE.MathUtils.lerp(1.4, 0.45, expansion);
 
     // Position the plume at the base of the currently burning stage.
     // Starts at the burning stage's nozzle exit plane.
     let offset = 0;
     for (let i = 0; i < stageIndex; i++) offset += this.stageGroups[i].height;
     this.plume.position.set(0, offset + (this.stageGroups[stageIndex]?.nozzleExit ?? -3.2), 0);
-    this.plume.scale.set(radius, length, radius);
+    this.plume.scale.set(1, length, 1);
 
     this.engineLight.position.set(0, offset - 6, 0);
     this.engineLight.distance = 200 + length * 6;
@@ -354,7 +375,10 @@ export default class Rocket {
     this._plumeFuel = fuel;
     const u = this.plumeMaterial.uniforms;
     if (fuel === "hydrolox") {
-      u.luminosity.value = 0.16;
+      // Hydrogen-oxygen exhaust is steam: in vacuum, a faint blue-violet
+      // shimmer at most. Over the bright Earth anything stronger reads as a
+      // glass bell trailing the stage.
+      u.luminosity.value = 0.06;
       u.coreColor.value.set(0xe4ecff);
       u.midColor.value.set(0x9fb6ff);
       u.edgeColor.value.set(0x6a70d8);

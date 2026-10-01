@@ -32,6 +32,7 @@ const GradeShader = {
     aberration: { value: 0.0016 },
     shadowTint: { value: new THREE.Color(0x0a1424) },
     exposure: { value: 1.0 },
+    whiteBalance: { value: new THREE.Color(1, 1, 1) },
   },
   vertexShader: /* glsl */ `
     varying vec2 vUv;
@@ -48,6 +49,7 @@ const GradeShader = {
     uniform float aberration;
     uniform float exposure;
     uniform vec3 shadowTint;
+    uniform vec3 whiteBalance;
     varying vec2 vUv;
 
     // Integer-style hash (Hoskins). The usual fract(sin(dot(...))*43758.0)
@@ -73,6 +75,8 @@ const GradeShader = {
       col.b = texture2D(tDiffuse, vUv - offset).b;
 
       col *= exposure;
+      // Camera white balance (see RenderPipeline.setWhiteBalance).
+      col *= whiteBalance;
 
       // Deep shadows pick up a faint cold cast — reflected starlight rather
       // than pure black, which reads better than crushed blacks.
@@ -231,6 +235,20 @@ export default class RenderPipeline {
 
   setExposure(value) {
     this.gradePass.uniforms.exposure.value = value;
+  }
+
+  /**
+   * Camera white balance for the current scene, as RGB gains. A camera on
+   * the ground is balanced for sunlight that has come through the air —
+   * which is genuinely yellow-orange next to the unfiltered sun in space — so
+   * that a white vehicle photographs white. Eased like exposure.
+   */
+  setWhiteBalance(color, dt = 1) {
+    const wb = this.gradePass.uniforms.whiteBalance.value;
+    const k = 1 - Math.exp(-4 * Math.min(dt, 0.25));
+    wb.r += (color.r - wb.r) * k;
+    wb.g += (color.g - wb.g) * k;
+    wb.b += (color.b - wb.b) * k;
   }
 
   /**
