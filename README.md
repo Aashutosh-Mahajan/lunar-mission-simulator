@@ -151,10 +151,6 @@ Acceleration uses bounded simulation steps and renders once per frame. To run
 the speed regression checks, start `npm run dev` in one terminal, then run
 `npm run test:autoplay` in another (requires `npx playwright install chromium`).
 
-The root `vercel.json` configures Vercel to install with `npm ci`, build with
-`npm run build`, and serve `dist`. Set the connected Vercel project's Production
-Branch to `main` to deploy pushes to that branch automatically.
-
 The game can fly itself, in every phase and at every difficulty:
 
 - **The Autoplay switch** on the main menu applies to all three missions. With it on,
