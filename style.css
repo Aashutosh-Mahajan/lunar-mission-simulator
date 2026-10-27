@@ -1947,10 +1947,25 @@ kbd {
    ------------------------------------------------------------------------ */
 
 @media (max-width: 900px) {
+  .hud-topbar {
+    top: 8px;
+    width: calc(100% - 16px);
+  }
+  .hud-block {
+    flex: 1;
+    min-width: 0;
+    padding: 6px;
+    overflow-wrap: anywhere;
+  }
+  .hud-mini-value { font-size: 0.72rem; }
+  .hud-mini-label { font-size: 0.5rem; letter-spacing: 0.1em; }
   .hud-panel {
     width: 172px;
     padding: 9px 10px 10px;
   }
+  .hud-left, .hud-right { top: 128px; }
+  .asc-log { bottom: 182px; right: 8px; }
+  .asc-log .log-line:nth-child(n + 3) { display: none; }
   .readout-big .readout-value {
     font-size: 1.4rem;
   }
@@ -1964,6 +1979,14 @@ kbd {
 }
 
 @media (max-width: 620px) {
+  .hud-panel { width: min(172px, calc(50% - 16px)); padding: 8px; }
+  .hud-left { left: 8px; }
+  .hud-right { right: 8px; }
+  .hud-panel .readout-value { font-size: 1rem; }
+  .hud-panel .readout-label { font-size: 0.5rem; letter-spacing: 0.04em; }
+  .hud-panel .readout-unit { font-size: 0.55rem; }
+  .readout-split { flex-wrap: wrap; gap: 5px; }
+  .insertion-panel { width: calc(100% - 16px); }
   .hud-instruments {
     bottom: 8px;
   }
