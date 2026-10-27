@@ -1,8 +1,7 @@
 import { LOCAL_STORAGE_SETTINGS_KEY } from "../constants.js";
 
 // Graphics settings, persisted locally. Defaults aim at "looks its best on a
-// mid-range laptop"; Low drops shadows, postprocessing and render scale for
-// integrated GPUs.
+// mid-range laptop"; Low reduces effect cost while preserving native clarity.
 
 const DEFAULTS = {
   difficulty: "cadet",
@@ -11,14 +10,26 @@ const DEFAULTS = {
   grade: true,
   antialias: true,
   particles: 1,
-  adaptiveResolution: true,
+  adaptiveResolution: false,
+  clarityVersion: 1,
   muted: false,
 };
 
 export function loadSettings() {
   try {
     const raw = localStorage.getItem(LOCAL_STORAGE_SETTINGS_KEY);
-    return raw ? { ...DEFAULTS, ...JSON.parse(raw) } : { ...DEFAULTS };
+    if (!raw) return { ...DEFAULTS };
+    const saved = JSON.parse(raw);
+    const settings = { ...DEFAULTS, ...saved };
+    // Upgrade the old automatically softened image once. Later explicit
+    // choices (including opting back into adaptive resolution) are preserved.
+    if (saved.clarityVersion !== DEFAULTS.clarityVersion) {
+      settings.adaptiveResolution = false;
+      settings.antialias = true;
+      settings.clarityVersion = DEFAULTS.clarityVersion;
+      saveSettings(settings);
+    }
+    return settings;
   } catch {
     return { ...DEFAULTS };
   }
@@ -50,7 +61,7 @@ export function bindSettingsUi(settings, onChange) {
   grade.checked = settings.grade;
   aa.checked = settings.antialias;
   particles.value = String(settings.particles);
-  if (adaptive) adaptive.checked = settings.adaptiveResolution !== false;
+  if (adaptive) adaptive.checked = settings.adaptiveResolution === true;
 
   const commit = () => {
     settings.quality = quality.value;
