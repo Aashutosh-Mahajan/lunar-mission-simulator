@@ -397,8 +397,9 @@ phases follow one set of rules.
   every phase, set so that 0.12-albedo regolith lands at a photographic mid grey — Apollo
   surface cameras were exposed for the soil. Each phase has its own exposure and camera
   white balance, eased like auto-exposure. Bloom only catches true HDR sources.
-- **HDR rendering** with ACES filmic tone mapping, bloom, lens ghosts, chromatic
-  aberration, vignette, film grain and SMAA (High) or FXAA (Medium) anti-aliasing.
+- **HDR rendering** with ACES filmic tone mapping, bloom, lens ghosts,
+  vignette and SMAA (High) or FXAA (Medium and Low) anti-aliasing. Animated film
+  grain and chromatic aberration are disabled for a clean, stable image.
 - **Image-based lighting** in every phase, baked from a shader-only probe of each scene.
   On the Moon the bright half of the environment is the sunlit ground below — the reason
   the shadow side of an Apollo LM is never black and its underside glows gold.
@@ -438,8 +439,9 @@ phases follow one set of rules.
 
 ### Performance
 
-- **Adaptive resolution** steps the render scale down when the frame rate drops below
-  ~45 fps and back up when there is headroom, so integrated GPUs stay smooth.
+- **Stable native resolution** is the default in every phase and quality preset,
+  using the screen pixel ratio up to 2×. Adaptive resolution is an optional Graphics
+  setting that trades image sharpness for performance on slower GPUs.
 - **Quality is picked from the GPU** on first launch; Low turns off the ground detail
   layers without a shader recompile.
 - **The sky is a lookup, not a march.** Marching the atmosphere per pixel cost ~9 ms a
