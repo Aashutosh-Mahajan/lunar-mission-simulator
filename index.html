@@ -46,6 +46,12 @@
               <span class="switch-label">Autoplay</span>
               <span class="switch-state" id="autoplay-switch-state">Off — you fly</span>
             </button>
+            <div class="autoplay-speed menu-autoplay-speed" role="group" aria-label="Autoplay speed">
+              <span>Autoplay speed</span>
+              <button type="button" data-autoplay-speed="1" aria-pressed="true">1×</button>
+              <button type="button" data-autoplay-speed="2" aria-pressed="false">2×</button>
+              <button type="button" data-autoplay-speed="3" aria-pressed="false">3×</button>
+            </div>
           </div>
 
           <div class="menu-actions">
@@ -66,6 +72,11 @@
       <!-- Shown over every phase's HUD while the computer is flying. -->
       <div id="autoplay-badge" class="autoplay-badge hidden" role="status">
         <span class="autoplay-dot"></span>AUTOPLAY<span class="autoplay-key">O to take control</span>
+        <div class="autoplay-speed" role="group" aria-label="Autoplay speed">
+          <button type="button" data-autoplay-speed="1" aria-pressed="true">1×</button>
+          <button type="button" data-autoplay-speed="2" aria-pressed="false">2×</button>
+          <button type="button" data-autoplay-speed="3" aria-pressed="false">3×</button>
+        </div>
       </div>
 
       <!-- ================= LEVEL SELECT ================= -->

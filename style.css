@@ -226,6 +226,50 @@ body {
   color: var(--ink-dim);
 }
 
+.autoplay-speed {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  pointer-events: auto;
+  letter-spacing: normal;
+}
+
+.menu-autoplay-speed {
+  justify-content: center;
+  margin-top: 10px;
+  color: var(--ink-dim);
+  font-size: 12px;
+}
+
+.autoplay-speed button {
+  min-width: 36px;
+  min-height: 32px;
+  padding: 4px 8px;
+  border: 1px solid rgba(227, 139, 255, 0.35);
+  border-radius: 3px;
+  background: var(--panel);
+  color: var(--ink-dim);
+  font: inherit;
+  cursor: pointer;
+}
+
+.autoplay-speed button[aria-pressed="true"],
+.autoplay-speed button:hover {
+  color: var(--magenta);
+  border-color: var(--magenta);
+  background: rgba(227, 139, 255, 0.12);
+}
+
+.autoplay-speed button:focus-visible {
+  outline: 2px solid var(--magenta);
+  outline-offset: 2px;
+}
+
+@media (max-width: 560px) {
+  .autoplay-badge { flex-wrap: wrap; justify-content: center; width: max-content; max-width: calc(100% - 24px); }
+  .autoplay-badge .autoplay-speed { flex-basis: 100%; justify-content: center; }
+}
+
 @keyframes autoplay-pulse {
   50% { opacity: 0.3; }
 }
