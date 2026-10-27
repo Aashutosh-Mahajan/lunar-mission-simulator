@@ -8,7 +8,8 @@
     "build": "vite build",
     "preview": "vite preview",
     "smoke": "node scripts/smoke.mjs",
-    "test:autoplay": "node scripts/autoplay-speed.mjs"
+    "test:autoplay": "node scripts/autoplay-speed.mjs",
+    "test:clarity": "node scripts/clarity.mjs"
   },
   "dependencies": {
     "cannon-es": "^0.20.0",
