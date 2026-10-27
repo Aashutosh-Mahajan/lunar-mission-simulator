@@ -225,6 +225,12 @@ class Game {
       }
     });
     click("autoplay-switch", () => this.setMenuAutoplay(!this.menuAutoplay));
+    for (const button of document.querySelectorAll("[data-autoplay-speed]")) {
+      button.addEventListener("click", () => {
+        this.autoplay.setSpeed(Number(button.dataset.autoplaySpeed));
+        this._syncAutoplayBadge();
+      });
+    }
     click("btn-pause-autoplay", () => {
       this.toggleAutoplay();
       if (this.autoplay.active) this.setPaused(false);
@@ -258,11 +264,11 @@ class Game {
 
     // Phase 2 buttons. A good orbit hands off to the trans-lunar coast.
     click("btn-asc-retry", () => this.startAscent());
-    click("btn-asc-descent", () => this.startCoast());
+    click("btn-asc-descent", () => this.startCoast({ autoplay: this._autoplayAtDebrief }));
     click("btn-asc-menu", () => this.quitToMenu());
 
     // Phase 3 buttons. Arriving in lunar orbit hands off to the descent.
-    click("btn-coast-descend", () => this.startLevel(1));
+    click("btn-coast-descend", () => this.startLevel(1, { autoplay: this._autoplayAtDebrief }));
     click("btn-coast-retry", () => this.startCoast());
     click("btn-coast-menu", () => this.quitToMenu());
 
@@ -757,8 +763,11 @@ class Game {
     // flying down as the picture goes to black.
     const simulating = this.state === "flight" || this.state === "transition";
     if (simulating) {
-      const burn = this.autoplay.active ? this.autoplay.coastControls(this.coast).burn : controls.burn;
-      this.coast.update(dt, { burn });
+      this.autoplay.advance(dt, this.state === "flight", (stepDt) => {
+        const burn = this.autoplay.active ? this.autoplay.coastControls(this.coast).burn : controls.burn;
+        this.coast.update(stepDt, { burn });
+        return !!this.coast.result;
+      });
     }
 
     this.coastCamera.drag(mouse.dx, mouse.dy);
@@ -966,6 +975,7 @@ class Game {
 
   /** Called by each start* method once its runtime exists. */
   _beginFlightAutoplay(runtime, hud) {
+    this._autoplayAtDebrief = false;
     this._autoplayUsed = false;
     this._chainTimer = 0;
     if (this.autoplay.active) {
@@ -1035,12 +1045,17 @@ class Game {
     const badge = document.getElementById("autoplay-badge");
     const flying = this.state === "flight" || this.state === "paused";
     if (badge) badge.classList.toggle("hidden", !(this.autoplay.active && flying));
+    for (const button of document.querySelectorAll("[data-autoplay-speed]")) {
+      button.setAttribute("aria-pressed", String(Number(button.dataset.autoplaySpeed) === this.autoplay.speed));
+    }
   }
 
   _markAutoplayDebrief(tagId) {
-    // Autoplay started on one flight covers that flight only, so the
-    // debrief's "Fly it again" is the player's. Watching the whole mission
-    // carries it on to the next phase.
+    // Continuing to the next phase keeps the pilot and chosen speed. Retrying
+    // still starts a manual flight. Remember the pilot before hiding its badge.
+    this._autoplayAtDebrief = this.autoplay.active;
+    // Hide the pilot on a one-off debrief so "Fly it again" is the player's.
+    // Continue restores it; watching the full mission carries it directly.
     if (!this.autoplayChain) this.autoplay.active = false;
     this._syncAutoplayBadge();
     if (!this._autoplayUsed) return;
@@ -1101,12 +1116,15 @@ class Game {
         const len = Math.hypot(this._viewDir.x, this._viewDir.z) || 1;
         const view = { x: this._viewDir.x / len, z: this._viewDir.z / len };
         this._lastView = view;
-        let flown;
-        if (this.state !== "flight") flown = this._neutralControls();
-        else if (this.autoplay.active) flown = autoplayDescentControls(this.runtime, this._neutralControls(), view);
-        else flown = controls;
-        flown.view = view;
-        this.runtime.update(dt, flown);
+        this.autoplay.advance(dt, this.state === "flight", (stepDt) => {
+          let flown;
+          if (this.state !== "flight") flown = this._neutralControls();
+          else if (this.autoplay.active) flown = autoplayDescentControls(this.runtime, this._neutralControls(), view);
+          else flown = controls;
+          flown.view = view;
+          this.runtime.update(stepDt, flown);
+          return !!this.runtime.result;
+        });
       }
 
       // Camera controls work in every state so the player can look around
@@ -1209,12 +1227,15 @@ class Game {
     const live = this.state === "flight";
 
     if (simulating) {
-      this.ascent.update(
-        dt,
-        !live ? this._ascentControls(this._neutralControls()) :
-          this.autoplay.active ? this.autoplay.ascentControls(this.ascent) :
-          this._ascentControls(controls)
-      );
+      this.autoplay.advance(dt, live, (stepDt) => {
+        this.ascent.update(
+          stepDt,
+          !live ? this._ascentControls(this._neutralControls()) :
+            this.autoplay.active ? this.autoplay.ascentControls(this.ascent) :
+            this._ascentControls(controls)
+        );
+        return !!this.ascent.result;
+      });
     }
 
     // The countdown banner lives outside the HUD so it can sit centre-screen.
