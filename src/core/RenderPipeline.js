@@ -19,17 +19,14 @@ import { FXAAPass } from "three/addons/postprocessing/FXAAPass.js";
 // ---------------------------------------------------------------------------
 
 /**
- * Lens/sensor character: vignette, subtle chromatic aberration toward the
- * frame edge, and animated sensor grain. Applied in linear space before tone
- * mapping so it behaves like an optical effect rather than a filter.
+ * Clean photographic grading: white balance, restrained vignette and lens
+ * flare in linear space. No animated grain or RGB offsets: fine detail must
+ * stay sharp and stationary in every phase.
  */
 const GradeShader = {
   uniforms: {
     tDiffuse: { value: null },
-    time: { value: 0 },
-    vignette: { value: 0.85 },
-    grain: { value: 0.035 },
-    aberration: { value: 0.0016 },
+    vignette: { value: 0.35 },
     shadowTint: { value: new THREE.Color(0x0a1424) },
     exposure: { value: 1.0 },
     whiteBalance: { value: new THREE.Color(1, 1, 1) },
@@ -45,10 +42,7 @@ const GradeShader = {
   `,
   fragmentShader: /* glsl */ `
     uniform sampler2D tDiffuse;
-    uniform float time;
     uniform float vignette;
-    uniform float grain;
-    uniform float aberration;
     uniform float exposure;
     uniform vec3 shadowTint;
     uniform vec3 whiteBalance;
@@ -81,27 +75,11 @@ const GradeShader = {
       return sum;
     }
 
-    // Integer-style hash (Hoskins). The usual fract(sin(dot(...))*43758.0)
-    // trick is unusable here: at full-resolution fragment coordinates the
-    // argument to sin() reaches ~1e6, where float precision collapses and the
-    // "noise" degenerates into a regular cross-hatch across the whole frame.
-    float hash(vec2 p) {
-      vec3 p3 = fract(vec3(p.xyx) * 0.1031);
-      p3 += dot(p3, p3.yzx + 33.33);
-      return fract((p3.x + p3.y) * p3.z);
-    }
-
     void main() {
       vec2 c = vUv - 0.5;
       float r2 = dot(c, c);
 
-      // Lateral chromatic aberration grows with distance from the axis,
-      // as it does in a real lens.
-      vec2 offset = c * aberration * r2 * 4.0;
-      vec3 col;
-      col.r = texture2D(tDiffuse, vUv + offset).r;
-      col.g = texture2D(tDiffuse, vUv).g;
-      col.b = texture2D(tDiffuse, vUv - offset).b;
+      vec3 col = texture2D(tDiffuse, vUv).rgb;
 
       if (flare > 0.0) col += lensGhosts(vUv) * flare;
 
@@ -117,15 +95,6 @@ const GradeShader = {
       // Vignette.
       float v = 1.0 - vignette * r2 * 1.15;
       col *= clamp(v, 0.0, 1.0);
-
-      // Animated sensor grain, stronger in the shadows like real read noise.
-      // Hashed on gl_FragCoord so it varies per *pixel*: hashing on a fixed
-      // UV grid instead aliases against the render resolution and shows up as
-      // a regular cross-hatch over the whole frame rather than as noise.
-      float n = hash(gl_FragCoord.xy + vec2(time * 137.13, time * 91.71)) - 0.5;
-      // Read noise is worst in the shadows, but never absent — floor it so
-      // dark areas don't turn into a snowstorm.
-      col += n * grain * (0.3 + 0.7 * (1.0 - smoothstep(0.0, 0.6, luma)));
 
       gl_FragColor = vec4(col, 1.0);
     }
@@ -166,8 +135,8 @@ export default class RenderPipeline {
     this.renderer.toneMappingExposure = 1;
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
 
-    // Adaptive resolution is on unless the player has explicitly turned it
-    // off; it is what keeps integrated GPUs smooth.
+    // Native resolution is stable by default. Adaptive resolution remains an
+    // explicit performance option for players who prefer it.
 
     this._buildComposer();
     this.applySettings(settings);
@@ -227,14 +196,13 @@ export default class RenderPipeline {
 
     this.renderer.shadowMap.enabled = q !== "low";
     this.bloomPass.enabled = settings.bloom !== false;
-    const aa = q !== "low" && settings.antialias !== false;
+    const aa = settings.antialias !== false;
     this.smaaPass.enabled = aa && q === "high";
     this.fxaaPass.enabled = aa && q !== "high";
     this.gradePass.enabled = settings.grade !== false;
 
-    this.adaptive = settings.adaptiveResolution !== false;
+    this.adaptive = settings.adaptiveResolution === true;
     this.bloomPass.strength = q === "high" ? 0.5 : 0.4;
-    this.gradePass.uniforms.grain.value = settings.grade === false ? 0 : q === "high" ? 0.016 : 0.011;
     // Ghosts need the bloom pass's blurred highlights.
     this.gradePass.uniforms.flare.value = this.bloomPass.enabled && q !== "low" ? 0.06 : 0;
 
@@ -242,7 +210,8 @@ export default class RenderPipeline {
     // High used to set this to the device pixel ratio itself, which squared
     // it: on a DPR-2 laptop screen the scene rendered at 4x density — sixteen
     // times the pixels — through bloom and SMAA.
-    this.maxRenderScale = q === "low" ? 0.75 : q === "high" ? 1 : 0.9;
+    // Quality changes lighting/effect cost, never silently softens the image.
+    this.maxRenderScale = 1;
     this.renderScale = this.maxRenderScale;
     this._frameAvg = 1 / 60;
     this._sinceChange = 0;
@@ -334,7 +303,6 @@ export default class RenderPipeline {
    */
   render(dt, elapsed, frameTime = dt) {
     if (this.adaptive) this._adaptResolution(frameTime);
-    this.gradePass.uniforms.time.value = elapsed;
 
     if (this._flash) {
       this._flash = Math.max(0, this._flash - dt * 3.2);
