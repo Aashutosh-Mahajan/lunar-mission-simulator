@@ -98,7 +98,26 @@ export function descentControls(runtime, neutral, view) {
 export default class Autoplay {
   constructor() {
     this.active = false;
+    this.speed = 1;
     this._saved = null;
+  }
+
+  setSpeed(speed) {
+    if (![1, 2, 3].includes(speed)) return;
+    this.speed = speed;
+  }
+
+  /** Extra simulation work only; cameras, UI and rendering still run once.
+   * Keep accelerated steps small and bounded, even after a slow frame.
+   * The callback returns true when the flight resolves, stopping extra steps.
+   */
+  advance(dt, live, step) {
+    const speed = this.active && live ? this.speed : 1;
+    const steps = speed === 1 ? 1 : Math.ceil(dt * speed / (1 / 60));
+    const stepDt = dt * speed / steps;
+    for (let i = 0; i < steps; i++) {
+      if (step(stepDt)) break;
+    }
   }
 
   /**
